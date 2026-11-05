@@ -4,7 +4,7 @@
 
 - Each Claude session runs in its own tmux session, named `cc-<session-id>`.
 - **Enter** suspends `asm` and attaches to that tmux session. Detach with the tmux prefix and **d** to return to `asm`; Claude keeps running.
-- `asm` only reads Claude Code's files. It never edits or deletes them.
+- `asm` only reads Claude Code's files, except when you import a session backup.
 
 ## Features
 
@@ -33,6 +33,7 @@
 - **Pins:** pinned sessions stay in a group at the top of the list.
 - **Rename:** give a session a name that `asm` shows instead of Claude's title. The name is stored by `asm` only; Claude Code does not see it.
 - **Hide:** remove a session from the list without touching its files. `U` shows hidden sessions again, dimmed. Hiding a running session stops it first.
+- **Move sessions between machines:** export a session to a `.tar.gz` file and import it on another machine. See [Moving a session to another machine](#moving-a-session-to-another-machine).
 - **Actions:**
   - Resume or attach.
   - Start a new session in a directory.
@@ -87,6 +88,8 @@ On start, sessions are grouped by last activity and sorted by activity, and the 
 | `R` | Rename (an empty name shows Claude's title again) |
 | `H` | Hide / unhide (asks first; a running session is stopped before it is hidden) |
 | `U` | Show or stop showing hidden sessions |
+| `E` | Export the session to a backup file |
+| `I` | Import a backup file |
 | `y` | Copy the session ID |
 | `Y` | Copy the resume command (`cd <dir> && claude --resume <id>`) |
 | `/` | Filter |
@@ -140,6 +143,9 @@ refresh_interval = "5s"
 
 # How many recent messages the transcript preview shows.
 preview_messages = 20
+
+# Where E writes backups by default.
+backup_dir = "~/asm-backups"
 ```
 
 ## Files
@@ -151,6 +157,20 @@ preview_messages = 20
 | `$XDG_CONFIG_HOME/asm/names.json` | Names given to sessions. |
 | `$XDG_CONFIG_HOME/asm/hidden.json` | Hidden sessions. |
 | `$XDG_CACHE_HOME/asm/index.json` | Cache of parsed transcript metadata. It is safe to delete. |
+
+## Moving a session to another machine
+
+1. On the first machine, select the session and press `E`. `asm` writes `<backup_dir>/<session-id>.tar.gz`; you can edit the path first. The backup holds:
+   - the transcript
+   - its subagent transcripts and tool results
+   - Claude's file history (the checkpoints that undo Claude's edits)
+2. Copy the file to the other machine, for example with `scp`.
+3. On the other machine, press `I` and enter the backup's path. Then enter the project's directory on that machine, which must exist.
+   - If the directory differs from the original, `asm` changes the transcript's working-directory fields to the new one. File paths inside messages and tool output still show the original machine's paths.
+   - If a session with the same ID already exists there, `asm` warns you and replaces it on confirmation. It refuses while that session is running.
+   - If that machine's `claude` is older than the version that wrote the session, `asm` warns that the session may not load.
+
+Claude Code's transcript format is internal and can change between versions, so a newer Claude on the target machine is the safer direction. Your pins, names and hidden sessions are not part of the backup.
 
 ## How it works
 

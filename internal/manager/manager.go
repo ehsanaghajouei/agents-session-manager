@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -268,6 +269,72 @@ func (m *Manager) Load(ctx context.Context, s provider.Session, n int) (provider
 	return m.prov.Load(ctx, m.ex, s, n)
 }
 
+func (m *Manager) backuper() (provider.Backuper, error) {
+	b, ok := m.prov.(provider.Backuper)
+	if !ok {
+		return nil, fmt.Errorf("%s sessions cannot be exported", m.prov.Name())
+	}
+	return b, nil
+}
+
+// Export writes a backup of s to path. An existing file is replaced only when
+// replace is set; otherwise the error wraps fs.ErrExist.
+func (m *Manager) Export(ctx context.Context, s provider.Session, path string, replace bool) error {
+	b, err := m.backuper()
+	if err != nil {
+		return err
+	}
+	if path, err = expandPath(path); err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); err == nil && !replace {
+		return fmt.Errorf("%s: %w", path, fs.ErrExist)
+	}
+	return b.Export(ctx, m.ex, s, path)
+}
+
+// Inspect describes the backup at path.
+func (m *Manager) Inspect(ctx context.Context, path string) (provider.BackupInfo, error) {
+	b, err := m.backuper()
+	if err != nil {
+		return provider.BackupInfo{}, err
+	}
+	if path, err = expandPath(path); err != nil {
+		return provider.BackupInfo{}, err
+	}
+	return b.Inspect(ctx, m.ex, path)
+}
+
+// Import restores the backup at path, holding session id, into the project
+// at dir. With replace, an existing copy of the session is replaced unless it
+// is running; state is checked here because the list can be seconds old.
+func (m *Manager) Import(ctx context.Context, path, id, dir string, replace bool) error {
+	b, err := m.backuper()
+	if err != nil {
+		return err
+	}
+	if path, err = expandPath(path); err != nil {
+		return err
+	}
+	if dir, err = expandDir(dir); err != nil {
+		return err
+	}
+	if replace {
+		tms, err := m.tmux.Sessions(ctx)
+		if err != nil {
+			return err
+		}
+		procs, err := m.prov.Running(ctx, m.ex)
+		if err != nil {
+			return err
+		}
+		if _, ok := tms[m.TmuxName(id)]; ok || procs[id].PID != 0 {
+			return errors.New("the session is running on this system; stop it before replacing it")
+		}
+	}
+	return b.Import(ctx, m.ex, path, dir, replace)
+}
+
 // ResumeCommand is a shell command that resumes s, for copying.
 func (m *Manager) ResumeCommand(s provider.Session) string {
 	argv := m.prov.ResumeCmd(s)
@@ -292,22 +359,31 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func expandDir(dir string) (string, error) {
-	dir = strings.TrimSpace(dir)
-	if dir == "~" || strings.HasPrefix(dir, "~/") {
+// expandPath expands a leading ~ and requires an absolute path.
+func expandPath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "~" || strings.HasPrefix(p, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		dir = filepath.Join(home, dir[1:])
+		p = filepath.Join(home, p[1:])
 	}
-	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("%q is not an absolute path", dir)
+	if !filepath.IsAbs(p) {
+		return "", fmt.Errorf("%q is not an absolute path", p)
+	}
+	return filepath.Clean(p), nil
+}
+
+func expandDir(dir string) (string, error) {
+	dir, err := expandPath(dir)
+	if err != nil {
+		return "", err
 	}
 	if !isDir(dir) {
 		return "", fmt.Errorf("%s is not a directory", dir)
 	}
-	return filepath.Clean(dir), nil
+	return dir, nil
 }
 
 func isDir(path string) bool {

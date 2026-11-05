@@ -28,7 +28,7 @@ go build -o asm ./cmd/asm
 | `internal/proc` | `/proc` helpers: process start time, liveness with pid-reuse guard, ancestry, SIGTERM-and-wait. |
 | `internal/tmux` | tmux client: list sessions and pane pids, new/kill/attach, `capture-pane`, prefix lookup. |
 | `internal/provider` | Agent-neutral types (`Session`, `Process`, `Transcript`) and the `Provider` interface. |
-| `internal/provider/claude` | Claude Code parsers (transcripts, live-process files) and resume/new commands. |
+| `internal/provider/claude` | Claude Code parsers (transcripts, live-process files), resume/new commands, and session backups (`backup.go`). |
 | `internal/index` | JSON cache of parsed transcript metadata, keyed by file path with size, mtime and offset. |
 | `internal/manager` | Combines sessions, processes and tmux sessions into `Item`s with a `State`; resume, new, kill and terminate. |
 | `internal/watch` | fsnotify watcher with debounce; signals the TUI to rescan. |
@@ -53,7 +53,9 @@ Adding another agent means a new package under `internal/provider/` that impleme
 
 ## Rules
 
-- **Read-only access to Claude Code's files.** Never write, move or delete anything under `claude_dir`.
+- **Read-only access to Claude Code's files.** Never write, move or delete anything under `claude_dir`. The one exception is importing a backup (`provider/claude/backup.go`), which runs only after the user confirms:
+  - It unpacks into a staging directory inside `claude_dir` and validates every archive entry before moving anything into place.
+  - It never leaves two transcripts with the same session ID, because `claude --resume <id>` refuses an ID it finds in two projects.
 - **No second process on one transcript.**
   - Never start a second Claude process for a session that is already running.
   - `Manager.Resume` re-checks the state at call time and returns `*ExternalError` for a process running outside tmux.

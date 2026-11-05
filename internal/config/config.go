@@ -29,6 +29,8 @@ type Config struct {
 	RefreshInterval Duration `toml:"refresh_interval"`
 	// PreviewMessages is how many recent messages the preview shows.
 	PreviewMessages int `toml:"preview_messages"`
+	// BackupDir is where exported sessions are written by default.
+	BackupDir string `toml:"backup_dir"`
 }
 
 // Duration is a time.Duration that reads from TOML strings like "5s".
@@ -53,6 +55,7 @@ func Default() Config {
 		TmuxPrefix:      "cc-",
 		RefreshInterval: Duration{5 * time.Second},
 		PreviewMessages: 20,
+		BackupDir:       expandHome("~/asm-backups"),
 	}
 }
 
@@ -84,6 +87,7 @@ func Load(path string) (Config, error) {
 	merge(&cfg, file)
 
 	cfg.ClaudeDir = expandHome(cfg.ClaudeDir)
+	cfg.BackupDir = expandHome(cfg.BackupDir)
 	return cfg, cfg.validate()
 }
 
@@ -105,6 +109,9 @@ func merge(dst *Config, src Config) {
 	}
 	if src.PreviewMessages > 0 {
 		dst.PreviewMessages = src.PreviewMessages
+	}
+	if src.BackupDir != "" {
+		dst.BackupDir = src.BackupDir
 	}
 }
 

@@ -6,9 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -190,6 +193,20 @@ type (
 		text string
 		err  error
 	}
+	exportMsg struct {
+		session provider.Session
+		path    string
+		err     error
+	}
+	inspectMsg struct {
+		path string
+		info provider.BackupInfo
+		err  error
+	}
+	importMsg struct {
+		id  string
+		err error
+	}
 	// hideMsg hides or unhides item once anything running in it is stopped.
 	hideMsg struct {
 		item    manager.Item
@@ -287,6 +304,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case hideMsg:
 		return m, m.onHide(msg)
+
+	case exportMsg:
+		return m, m.onExport(msg)
+
+	case inspectMsg:
+		return m, m.onInspect(msg)
+
+	case importMsg:
+		return m, m.onImport(msg)
 
 	case clearStatusMsg:
 		if msg.seq == m.statusSeq {
@@ -504,6 +530,132 @@ func (m *Model) onHide(msg hideMsg) tea.Cmd {
 	return tea.Batch(append(cmds, m.setStatus(text, levelInfo), m.syncPreview(true))...)
 }
 
+func (m *Model) openExportDialog(it manager.Item) tea.Cmd {
+	s := it.Session
+	in := m.newInput(shortPath(filepath.Join(m.cfg.BackupDir, s.ID+".tar.gz")))
+	m.dialog = &dialog{
+		title: "Export session",
+		body:  fmt.Sprintf("Write a backup of %q to:", oneLine(it.Title())),
+		input: &in,
+		onYes: func(m *Model, path string) tea.Cmd { return m.export(s, path, false) },
+	}
+	return in.Focus()
+}
+
+func (m *Model) export(s provider.Session, path string, replace bool) tea.Cmd {
+	mgr := m.mgr
+	return tea.Batch(m.setStatus("Exporting "+shortID(s.ID)+"…", levelInfo), func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		return exportMsg{session: s, path: path, err: mgr.Export(ctx, s, path, replace)}
+	})
+}
+
+func (m *Model) onExport(msg exportMsg) tea.Cmd {
+	switch {
+	case errors.Is(msg.err, fs.ErrExist):
+		m.status = ""
+		m.dialog = &dialog{
+			title: "Replace backup?",
+			body:  fmt.Sprintf("%s already exists. Replace it?", msg.path),
+			onYes: func(m *Model, _ string) tea.Cmd { return m.export(msg.session, msg.path, true) },
+		}
+		return nil
+	case msg.err != nil:
+		return m.setStatus("Export failed: "+msg.err.Error(), levelError)
+	}
+	return m.setStatus("Exported "+shortID(msg.session.ID)+" to "+msg.path, levelInfo)
+}
+
+func (m *Model) openImportDialog() tea.Cmd {
+	in := m.newInput(shortPath(m.cfg.BackupDir) + "/")
+	m.dialog = &dialog{
+		title: "Import session",
+		body:  "Backup file to import:",
+		input: &in,
+		onYes: func(m *Model, path string) tea.Cmd { return m.inspect(path) },
+	}
+	return in.Focus()
+}
+
+func (m *Model) inspect(path string) tea.Cmd {
+	mgr := m.mgr
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		info, err := mgr.Inspect(ctx, path)
+		return inspectMsg{path: path, info: info, err: err}
+	}
+}
+
+// onInspect asks where the backup's project lives on this system, with any
+// warnings, before importing it.
+func (m *Model) onInspect(msg inspectMsg) tea.Cmd {
+	if msg.err != nil {
+		return m.setStatus("Import failed: "+msg.err.Error(), levelError)
+	}
+	b := msg.info
+	version := "unknown"
+	if b.Version != "" {
+		version = "v" + b.Version
+	}
+	lines := []string{fmt.Sprintf("%q · %s · Claude %s", oneLine(b.Title), shortID(b.SessionID), version)}
+	if b.Exists {
+		lines = append(lines, m.st.warnText.Render("A session with this ID already exists here. Importing replaces it."))
+	}
+	if olderVersion(b.LocalVersion, b.Version) {
+		lines = append(lines, m.st.warnText.Render(fmt.Sprintf(
+			"This system's claude is v%s, older than v%s that wrote the session. It may not load.", b.LocalVersion, b.Version)))
+	}
+	lines = append(lines, "", "Project directory on this system:")
+	in := m.newInput(shortPath(b.CWD))
+	m.dialog = &dialog{
+		title: "Import session",
+		body:  strings.Join(lines, "\n"),
+		input: &in,
+		onYes: func(m *Model, dir string) tea.Cmd { return m.importBackup(msg.path, b, dir) },
+	}
+	return in.Focus()
+}
+
+func (m *Model) importBackup(path string, b provider.BackupInfo, dir string) tea.Cmd {
+	mgr := m.mgr
+	return tea.Batch(m.setStatus("Importing "+shortID(b.SessionID)+"…", levelInfo), func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		return importMsg{id: b.SessionID, err: mgr.Import(ctx, path, b.SessionID, dir, b.Exists)}
+	})
+}
+
+func (m *Model) onImport(msg importMsg) tea.Cmd {
+	if msg.err != nil {
+		return m.setStatus("Import failed: "+msg.err.Error(), levelError)
+	}
+	m.selID = msg.id // select it once the scan lists it
+	return tea.Batch(m.setStatus("Imported "+shortID(msg.id), levelInfo), m.scan())
+}
+
+// olderVersion reports whether dotted version local is older than v. Unknown
+// or unparsable versions compare as not older.
+func olderVersion(local, v string) bool {
+	parse := func(s string) []int {
+		var out []int
+		for _, f := range strings.Split(s, ".") {
+			n, err := strconv.Atoi(f)
+			if err != nil {
+				return nil
+			}
+			out = append(out, n)
+		}
+		return out
+	}
+	a, b := parse(local), parse(v)
+	if a == nil || b == nil {
+		return false
+	}
+	return slices.Compare(a, b) < 0
+}
+
 // applyNames copies the stored names into the items.
 func (m *Model) applyNames() {
 	if m.names == nil {
@@ -529,12 +681,7 @@ func (m *Model) openRenameDialog(it manager.Item) tea.Cmd {
 	if m.names == nil {
 		return m.setStatus("Renaming is unavailable: the names file could not be read at startup.", levelError)
 	}
-	in := textinput.New()
-	in.Prompt = "> "
-	in.SetStyles(textinput.DefaultStyles(m.dark))
-	in.SetWidth(min(max(m.width-16, 20), 80))
-	in.SetValue(oneLine(it.Title()))
-	in.CursorEnd()
+	in := m.newInput(oneLine(it.Title()))
 	m.dialog = &dialog{
 		title: "Rename session",
 		body:  "Name shown in asm. Leave empty to show Claude's title again:",
@@ -782,17 +929,23 @@ func (m *Model) terminateAndResume(p provider.Process, s provider.Session) tea.C
 	})
 }
 
+// newInput returns a dialog input holding value, with the cursor at its end.
+func (m *Model) newInput(value string) textinput.Model {
+	in := textinput.New()
+	in.Prompt = "> "
+	in.SetStyles(textinput.DefaultStyles(m.dark))
+	in.SetWidth(min(max(m.width-16, 20), 80))
+	in.SetValue(value)
+	in.CursorEnd()
+	return in
+}
+
 func (m *Model) openNewDialog() tea.Cmd {
 	dir, _ := os.Getwd()
 	if it := m.selected(); it != nil && it.Session.CWD != "" && !it.DirMissing {
 		dir = it.Session.CWD
 	}
-	in := textinput.New()
-	in.Prompt = "> "
-	in.SetStyles(textinput.DefaultStyles(m.dark))
-	in.SetWidth(min(max(m.width-16, 20), 80))
-	in.SetValue(shortPath(dir))
-	in.CursorEnd()
+	in := m.newInput(shortPath(dir))
 	m.dialog = &dialog{
 		title: "New Claude session",
 		body:  "Directory to start Claude in:",
@@ -900,6 +1053,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if it != nil {
 			return m.confirmHide(*it)
 		}
+	case key.Matches(msg, k.Export):
+		if it != nil {
+			return m.openExportDialog(*it)
+		}
+	case key.Matches(msg, k.Import):
+		return m.openImportDialog()
 	case key.Matches(msg, k.ShowHidden):
 		m.showHidden = !m.showHidden
 		m.rebuild()

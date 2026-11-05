@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/ehsanaghajouei/agents-session-manager/internal/host"
@@ -97,4 +98,37 @@ type Provider interface {
 	ResumeCmd(s Session) []string
 	// NewCmd is the argv that starts a new session with the given ID.
 	NewCmd(id string) []string
+}
+
+// ErrSessionExists is returned when an import would replace a session that
+// already exists and replacing was not allowed.
+var ErrSessionExists = errors.New("a session with this ID already exists")
+
+// Backup describes a session backup file.
+type Backup struct {
+	Agent     string    `json:"agent"`
+	SessionID string    `json:"session_id"`
+	CWD       string    `json:"cwd"`
+	Title     string    `json:"title"`
+	Version   string    `json:"version"` // agent version that last wrote the session
+	Exported  time.Time `json:"exported"`
+}
+
+// BackupInfo is a backup as seen from the host it is about to be imported on.
+type BackupInfo struct {
+	Backup
+	Exists       bool   // the host already has a session with this ID
+	LocalVersion string // agent version installed on the host; "" if unknown
+}
+
+// Backuper is implemented by providers that can move sessions between hosts.
+type Backuper interface {
+	// Export writes s to a backup file at path, replacing any file there.
+	Export(ctx context.Context, ex host.Executor, s Session, path string) error
+	// Inspect reads a backup's description without importing it.
+	Inspect(ctx context.Context, ex host.Executor, path string) (BackupInfo, error)
+	// Import restores a backup for the project at cwd. An existing session with
+	// the same ID is replaced only when replace is set; otherwise the result is
+	// ErrSessionExists.
+	Import(ctx context.Context, ex host.Executor, path, cwd string, replace bool) error
 }

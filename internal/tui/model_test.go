@@ -321,3 +321,54 @@ func TestHideKey(t *testing.T) {
 		t.Error("y did not unhide the session")
 	}
 }
+
+func TestExportImportDialogs(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	m.cfg.BackupDir = "/backups"
+
+	press(m, "G", "E") // "Write docs"
+	if m.dialog == nil || m.dialog.title != "Export session" || m.dialog.input.Value() != "/backups/c.tar.gz" {
+		t.Fatalf("export dialog = %+v", m.dialog)
+	}
+	press(m, "esc")
+
+	press(m, "I")
+	if m.dialog == nil || m.dialog.title != "Import session" || m.dialog.input.Value() != "/backups/" {
+		t.Fatalf("import dialog = %+v", m.dialog)
+	}
+	press(m, "esc")
+
+	info := provider.BackupInfo{
+		Backup:       provider.Backup{SessionID: "c", CWD: "/srv/web", Title: "Write docs", Version: "2.1.300"},
+		Exists:       true,
+		LocalVersion: "2.1.99",
+	}
+	m.onInspect(inspectMsg{path: "/backups/c.tar.gz", info: info})
+	if m.dialog == nil || m.dialog.input.Value() != "/srv/web" {
+		t.Fatalf("project dialog = %+v", m.dialog)
+	}
+	body := ansi.Strip(m.dialog.body)
+	for _, want := range []string{"already exists here", "v2.1.99, older than v2.1.300"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dialog lacks %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestOlderVersion(t *testing.T) {
+	for _, c := range []struct {
+		local, v string
+		want     bool
+	}{
+		{"2.1.99", "2.1.300", true},
+		{"2.1.300", "2.1.300", false},
+		{"2.2.0", "2.1.300", false},
+		{"", "2.1.300", false},
+		{"2.1.300", "", false},
+		{"2.1.x", "2.1.300", false},
+	} {
+		if got := olderVersion(c.local, c.v); got != c.want {
+			t.Errorf("olderVersion(%q, %q) = %v", c.local, c.v, got)
+		}
+	}
+}

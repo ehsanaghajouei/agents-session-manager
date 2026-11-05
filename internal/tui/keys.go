@@ -5,7 +5,7 @@ import "charm.land/bubbles/v2/key"
 type keyMap struct {
 	Up, Down, PageUp, PageDown, Top, Bottom key.Binding
 	Resume, New, Kill, Pin, Rename, Hide    key.Binding
-	CopyID, CopyCmd                         key.Binding
+	CopyID, CopyCmd, Export, Import         key.Binding
 	Filter, ClearFilter, Sort, Group        key.Binding
 	ShowHidden                              key.Binding
 	PreviewMode, TogglePreview              key.Binding
@@ -32,6 +32,8 @@ func defaultKeys() keyMap {
 		Hide:          b([]string{"H"}, "H", "hide/unhide"),
 		CopyID:        b([]string{"y"}, "y", "copy session ID"),
 		CopyCmd:       b([]string{"Y"}, "Y", "copy resume command"),
+		Export:        b([]string{"E"}, "E", "export to a backup file"),
+		Import:        b([]string{"I"}, "I", "import a backup file"),
 		Filter:        b([]string{"/"}, "/", "filter"),
 		ClearFilter:   b([]string{"esc"}, "esc", "clear filter"),
 		Sort:          b([]string{"s"}, "s", "sort"),
@@ -56,7 +58,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
-		{k.Resume, k.New, k.Kill, k.Pin, k.Rename, k.Hide, k.CopyID, k.CopyCmd, k.Refresh},
+		{k.Resume, k.New, k.Kill, k.Pin, k.Rename, k.Hide, k.Export, k.Import, k.CopyID, k.CopyCmd, k.Refresh},
 		{k.Filter, k.ClearFilter, k.Sort, k.Group, k.ShowHidden},
 		{k.PreviewMode, k.TogglePreview, k.ScrollDown, k.ScrollUp, k.HalfDown, k.HalfUp},
 		{k.Help, k.Quit},
