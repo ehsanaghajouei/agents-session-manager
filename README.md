@@ -32,6 +32,7 @@
 - **Filter:** fuzzy text plus field filters for status, project, host and date range.
 - **Pins:** pinned sessions stay in a group at the top of the list.
 - **Rename:** give a session a name that `asm` shows instead of Claude's title. The name is stored by `asm` only; Claude Code does not see it.
+- **Hide:** remove a session from the list without touching its files. `U` shows hidden sessions again, dimmed. Hiding a running session stops it first.
 - **Actions:**
   - Resume or attach.
   - Start a new session in a directory.
@@ -84,6 +85,8 @@ On start, sessions are grouped by last activity and sorted by activity, and the 
 | `x` | Kill the session's tmux session |
 | `P` | Pin / unpin |
 | `R` | Rename (an empty name shows Claude's title again) |
+| `H` | Hide / unhide (asks first; a running session is stopped before it is hidden) |
+| `U` | Show or stop showing hidden sessions |
 | `y` | Copy the session ID |
 | `Y` | Copy the resume command (`cd <dir> && claude --resume <id>`) |
 | `/` | Filter |
@@ -146,6 +149,7 @@ preview_messages = 20
 | `$XDG_CONFIG_HOME/asm/config.toml` | Settings (optional). |
 | `$XDG_CONFIG_HOME/asm/pins.json` | Pinned sessions. |
 | `$XDG_CONFIG_HOME/asm/names.json` | Names given to sessions. |
+| `$XDG_CONFIG_HOME/asm/hidden.json` | Hidden sessions. |
 | `$XDG_CACHE_HOME/asm/index.json` | Cache of parsed transcript metadata. It is safe to delete. |
 
 ## How it works

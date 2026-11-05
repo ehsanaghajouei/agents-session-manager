@@ -19,6 +19,7 @@ type styles struct {
 	errText   lipgloss.Style
 	warnText  lipgloss.Style
 	divider   lipgloss.Style
+	hiddenRow lipgloss.Style
 	pane      lipgloss.Style
 	user      lipgloss.Style
 	tool      lipgloss.Style
@@ -54,6 +55,7 @@ func newStyles(dark bool) styles {
 		errText:   s().Foreground(red),
 		warnText:  s().Foreground(yellow),
 		divider:   s().Foreground(faint),
+		hiddenRow: s().Foreground(faint),
 		pane:      s().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(faint).PaddingLeft(1),
 		user:      s().Bold(true).Foreground(accent),
 		tool:      s().Foreground(muted),

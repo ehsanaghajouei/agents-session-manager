@@ -288,6 +288,10 @@ func (m *Model) viewList(width, height int) string {
 			lines = append(lines, m.st.selected.Render(fit(" "+strings.Join(cells, " "), width, false)))
 			continue
 		}
+		if m.isHidden(it) {
+			lines = append(lines, m.st.hiddenRow.Render(" "+strings.Join(cells, " ")))
+			continue
+		}
 		for j, c := range cols {
 			switch c.name {
 			case "STATUS":

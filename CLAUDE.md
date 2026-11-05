@@ -32,7 +32,8 @@ go build -o asm ./cmd/asm
 | `internal/index` | JSON cache of parsed transcript metadata, keyed by file path with size, mtime and offset. |
 | `internal/manager` | Combines sessions, processes and tmux sessions into `Item`s with a `State`; resume, new, kill and terminate. |
 | `internal/watch` | fsnotify watcher with debounce; signals the TUI to rescan. |
-| `internal/pins` | Pinned sessions, stored in `$XDG_CONFIG_HOME/asm/pins.json`. |
+| `internal/jsonfile` | Reads and atomically writes asm's JSON state files. |
+| `internal/idset` | A set of sessions in a JSON file: pins (`pins.json`) and hidden sessions (`hidden.json`) in `$XDG_CONFIG_HOME/asm/`. |
 | `internal/names` | Names the user gave sessions, stored in `$XDG_CONFIG_HOME/asm/names.json`. The TUI copies them into `manager.Item.Alias`. |
 | `internal/tui` | Bubble Tea model: list, preview, filter, dialogs, help. |
 
@@ -57,7 +58,7 @@ Adding another agent means a new package under `internal/provider/` that impleme
   - Never start a second Claude process for a session that is already running.
   - `Manager.Resume` re-checks the state at call time and returns `*ExternalError` for a process running outside tmux.
   - The TUI then asks before sending SIGTERM.
-- **Confirmation:** every destructive action (kill, terminate) asks first.
+- **Confirmation:** every destructive action (kill, terminate, hide) asks first.
 - **tmux targets:**
   - Use exact-match targets (`=name`).
   - Start commands with an argv list, never through a shell string.

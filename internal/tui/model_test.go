@@ -16,9 +16,9 @@ import (
 
 	"github.com/ehsanaghajouei/agents-session-manager/internal/config"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/host"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/idset"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
-	"github.com/ehsanaghajouei/agents-session-manager/internal/pins"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/tmux"
 )
@@ -191,7 +191,7 @@ func TestExternalResumeAsks(t *testing.T) {
 
 func TestPinKey(t *testing.T) {
 	m := newTestModel(t, 140, 30)
-	store, err := pins.Load(filepath.Join(t.TempDir(), "pins.json"))
+	store, err := idset.Load(filepath.Join(t.TempDir(), "pins.json"), "pins")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,5 +270,54 @@ func TestRenameKey(t *testing.T) {
 	press(m, "enter")
 	if got := store.Get("local", "c"); got != "" || strings.Contains(m.render(), "handbook") {
 		t.Errorf("empty input did not remove the name (%q)", got)
+	}
+}
+
+func TestHideKey(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	set, err := idset.Load(filepath.Join(t.TempDir(), "hidden.json"), "hidden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.hidden = set
+
+	// A running session: the dialog says what gets stopped; n leaves it alone.
+	press(m, "g") // "Fix login bug", external pid 42
+	press(m, "H")
+	if m.dialog == nil || !strings.Contains(m.dialog.body, "SIGTERM") || !strings.Contains(m.dialog.body, "pid 42") {
+		t.Fatalf("dialog = %+v", m.dialog)
+	}
+	press(m, "n")
+	if set.Has("local", "b") {
+		t.Error("n hid the session")
+	}
+
+	press(m, "G") // "Write docs", saved
+	press(m, "H")
+	if m.dialog == nil || m.dialog.title != "Hide session?" {
+		t.Fatalf("dialog = %+v", m.dialog)
+	}
+	press(m, "y")
+	if !set.Has("local", "c") {
+		t.Fatal("y did not hide the session")
+	}
+	if got := strings.Join(titles(m), ","); got != "Fix login bug,Deploy the API" {
+		t.Errorf("titles = %s", got)
+	}
+	if out := ansi.Strip(m.render()); !strings.Contains(out, "2/3 shown · 1 hidden") {
+		t.Error("top bar lacks the hidden count")
+	}
+
+	press(m, "U")
+	if got := len(titles(m)); got != 3 {
+		t.Errorf("U shows %d sessions, want 3", got)
+	}
+	press(m, "G", "H")
+	if m.dialog == nil || m.dialog.title != "Unhide session?" {
+		t.Fatalf("dialog = %+v", m.dialog)
+	}
+	press(m, "y")
+	if set.Has("local", "c") || strings.Contains(ansi.Strip(m.render()), "1 hidden") {
+		t.Error("y did not unhide the session")
 	}
 }

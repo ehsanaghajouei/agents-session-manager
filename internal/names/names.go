@@ -3,14 +3,10 @@
 package names
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"slices"
 	"sync"
+
+	"github.com/ehsanaghajouei/agents-session-manager/internal/jsonfile"
 )
 
 // Name is the name of one session. Host keeps IDs from different machines apart.
@@ -35,20 +31,11 @@ type Store struct {
 // Load reads path. A missing file is an empty store; an unreadable one is an
 // error, so a later save cannot overwrite names the user still has.
 func Load(path string) (*Store, error) {
-	s := &Store{path: path}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return s, nil
-	}
-	if err != nil {
+	var f file
+	if err := jsonfile.Read(path, &f); err != nil {
 		return nil, err
 	}
-	var f file
-	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	s.names = f.Names
-	return s, nil
+	return &Store{path: path, names: f.Names}, nil
 }
 
 // Get returns the session's name, or "" when it has none.
@@ -91,27 +78,7 @@ func (s *Store) index(host, id string) int {
 	return slices.IndexFunc(s.names, func(n Name) bool { return n.Host == host && n.ID == id })
 }
 
-// save writes the file atomically. The caller holds mu.
+// save writes the file. The caller holds mu.
 func (s *Store) save() error {
-	data, err := json.MarshalIndent(file{Names: s.names}, "", "  ")
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".names-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // no-op after a successful rename
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), s.path)
+	return jsonfile.Write(s.path, file{Names: s.names})
 }

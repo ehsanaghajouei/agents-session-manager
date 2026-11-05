@@ -21,9 +21,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ehsanaghajouei/agents-session-manager/internal/config"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/idset"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
-	"github.com/ehsanaghajouei/agents-session-manager/internal/pins"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
 )
 
@@ -38,9 +38,11 @@ type Options struct {
 	// Warnings are shown once at startup.
 	Warnings []string
 	// Pins holds pinned sessions. Nil disables pinning.
-	Pins *pins.Store
+	Pins *idset.Set
 	// Names holds the names given to sessions. Nil disables renaming.
 	Names *names.Store
+	// Hidden holds hidden sessions. Nil disables hiding.
+	Hidden *idset.Set
 }
 
 type statusLevel int
@@ -65,8 +67,9 @@ type Model struct {
 	changes   <-chan struct{}
 	afterScan func() error
 	startup   []string
-	pins      *pins.Store
+	pins      *idset.Set
 	names     *names.Store
+	hidden    *idset.Set
 	keys      keyMap
 	help      help.Model
 	md        *mdRenderer
@@ -78,17 +81,18 @@ type Model struct {
 	dark          bool
 	st            styles
 
-	items     []manager.Item
-	warnings  string
-	rows      []row
-	cursor    int
-	offset    int
-	selID     string
-	sortBy    sortKey
-	groupBy   groupKey
-	query     query
-	filterIn  textinput.Model
-	filtering bool
+	items      []manager.Item
+	warnings   string
+	rows       []row
+	cursor     int
+	offset     int
+	selID      string
+	sortBy     sortKey
+	groupBy    groupKey
+	query      query
+	filterIn   textinput.Model
+	filtering  bool
+	showHidden bool // list hidden sessions too, dimmed
 
 	previewOn   bool
 	live        bool // preview shows the tmux pane instead of the transcript
@@ -124,6 +128,7 @@ func New(o Options) *Model {
 		startup:     o.Warnings,
 		pins:        o.Pins,
 		names:       o.Names,
+		hidden:      o.Hidden,
 		keys:        defaultKeys(),
 		help:        help.New(),
 		md:          newMDRenderer(),
@@ -184,6 +189,13 @@ type (
 	actionMsg struct {
 		text string
 		err  error
+	}
+	// hideMsg hides or unhides item once anything running in it is stopped.
+	hideMsg struct {
+		item    manager.Item
+		hide    bool
+		stopped bool
+		err     error
 	}
 	clearStatusMsg struct{ seq int }
 	prefixMsg      struct{ key string }
@@ -272,6 +284,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setStatus(msg.err.Error(), levelError)
 		}
 		return m, tea.Batch(m.setStatus(msg.text, levelInfo), m.scan())
+
+	case hideMsg:
+		return m, m.onHide(msg)
 
 	case clearStatusMsg:
 		if msg.seq == m.statusSeq {
@@ -371,6 +386,9 @@ func waitChanges(ch <-chan struct{}) tea.Cmd {
 // rebuild applies the filter, sort and grouping, keeping the selection.
 func (m *Model) rebuild() {
 	idx := filterItems(m.items, m.query)
+	if !m.showHidden {
+		idx = slices.DeleteFunc(idx, func(i int) bool { return m.isHidden(m.items[i]) })
+	}
 	m.rows = buildRows(m.items, idx, m.sortBy, m.groupBy, m.now(), m.isPinned)
 	m.cursor = -1
 	for i, r := range m.rows {
@@ -405,6 +423,85 @@ func (m *Model) togglePin(it manager.Item) tea.Cmd {
 		return m.setStatus("Pinned "+shortID(it.Session.ID), levelInfo)
 	}
 	return m.setStatus("Unpinned "+shortID(it.Session.ID), levelInfo)
+}
+
+func (m *Model) isHidden(it manager.Item) bool {
+	return m.hidden != nil && m.hidden.Has(it.Session.Host, it.Session.ID)
+}
+
+func (m *Model) confirmHide(it manager.Item) tea.Cmd {
+	if m.hidden == nil {
+		return m.setStatus("Hiding is unavailable: the hidden file could not be read at startup.", levelError)
+	}
+	title := oneLine(it.Title())
+	if m.isHidden(it) {
+		m.dialog = &dialog{
+			title: "Unhide session?",
+			body:  fmt.Sprintf("Show %q in the list again?", title),
+			onYes: func(m *Model, _ string) tea.Cmd { return m.onHide(hideMsg{item: it}) },
+		}
+		return nil
+	}
+	body := fmt.Sprintf("Hide %q from the list?\nIts files are kept. U shows hidden sessions.", title)
+	switch {
+	case it.Tmux != nil && it.State == manager.StateExternal:
+		body += fmt.Sprintf("\n\nIt is running: asm first kills tmux session %s and sends SIGTERM to pid %d.", it.Tmux.Name, it.Process.PID)
+	case it.Tmux != nil:
+		body += fmt.Sprintf("\n\nIt is running: asm first kills tmux session %s, which stops Claude.", it.Tmux.Name)
+	case it.Process != nil:
+		body += fmt.Sprintf("\n\nIt is running as pid %d outside tmux: asm first sends it SIGTERM.", it.Process.PID)
+	}
+	m.dialog = &dialog{
+		title: "Hide session?",
+		body:  body,
+		onYes: func(m *Model, _ string) tea.Cmd { return m.stopAndHide(it) },
+	}
+	return nil
+}
+
+// stopAndHide stops the session's tmux session and process, if any, then hides it.
+func (m *Model) stopAndHide(it manager.Item) tea.Cmd {
+	if it.Tmux == nil && it.Process == nil {
+		return m.onHide(hideMsg{item: it, hide: true})
+	}
+	mgr := m.mgr
+	return tea.Batch(m.setStatus("Stopping "+shortID(it.Session.ID)+"…", levelInfo), func() tea.Msg {
+		msg := hideMsg{item: it, hide: true, stopped: true}
+		if it.Tmux != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if msg.err = mgr.Kill(ctx, it.Session); msg.err != nil {
+				return msg
+			}
+		}
+		if it.State == manager.StateExternal {
+			msg.err = mgr.Terminate(*it.Process)
+		}
+		return msg
+	})
+}
+
+func (m *Model) onHide(msg hideMsg) tea.Cmd {
+	var cmds []tea.Cmd
+	if msg.stopped {
+		cmds = append(cmds, m.scan())
+	}
+	s := msg.item.Session
+	switch {
+	case msg.err != nil:
+		return tea.Batch(append(cmds, m.setStatus("Not hidden: "+msg.err.Error(), levelError))...)
+	case m.isHidden(msg.item) == msg.hide: // already done, e.g. H pressed twice
+		return tea.Batch(cmds...)
+	}
+	if _, err := m.hidden.Toggle(s.Host, s.ID); err != nil {
+		return tea.Batch(append(cmds, m.setStatus("hidden: "+err.Error(), levelError))...)
+	}
+	m.rebuild()
+	text := "Unhid " + shortID(s.ID)
+	if msg.hide {
+		text = "Hid " + shortID(s.ID) + " · U shows hidden sessions"
+	}
+	return tea.Batch(append(cmds, m.setStatus(text, levelInfo), m.syncPreview(true))...)
 }
 
 // applyNames copies the stored names into the items.
@@ -799,6 +896,18 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if it != nil {
 			return m.openRenameDialog(*it)
 		}
+	case key.Matches(msg, k.Hide):
+		if it != nil {
+			return m.confirmHide(*it)
+		}
+	case key.Matches(msg, k.ShowHidden):
+		m.showHidden = !m.showHidden
+		m.rebuild()
+		text := "Hidden sessions are not shown"
+		if m.showHidden {
+			text = "Showing hidden sessions"
+		}
+		return tea.Batch(m.setStatus(text, levelInfo), m.syncPreview(true))
 	case key.Matches(msg, k.CopyID):
 		if it != nil {
 			return tea.Batch(tea.SetClipboard(it.Session.ID), m.setStatus("Copied session ID", levelInfo))
@@ -949,7 +1058,7 @@ func (m *Model) render() string {
 
 func (m *Model) viewTitle() string {
 	left := m.st.title.Render(" asm") + m.st.titleInfo.Render(" · Claude Code sessions")
-	shown, running := 0, 0
+	shown, running, hidden := 0, 0, 0
 	for _, r := range m.rows {
 		if r.item >= 0 {
 			shown++
@@ -959,8 +1068,15 @@ func (m *Model) viewTitle() string {
 		if it.Process != nil {
 			running++
 		}
+		if m.isHidden(it) {
+			hidden++
+		}
 	}
-	info := fmt.Sprintf("%d/%d shown · %d running · sort: %s · group: %s ", shown, len(m.items), running, m.sortBy, m.groupBy)
+	info := fmt.Sprintf("%d/%d shown", shown, len(m.items))
+	if hidden > 0 {
+		info += fmt.Sprintf(" · %d hidden", hidden)
+	}
+	info += fmt.Sprintf(" · %d running · sort: %s · group: %s ", running, m.sortBy, m.groupBy)
 	if !m.loaded {
 		info = "scanning… "
 	}
