@@ -1,0 +1,218 @@
+package tui
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/ehsanaghajouei/agents-session-manager/internal/config"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/host"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/pins"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/tmux"
+)
+
+// noTmux behaves like a host without a running tmux server.
+type noTmux struct{}
+
+func (noTmux) Name() string  { return "local" }
+func (noTmux) IsLocal() bool { return true }
+func (noTmux) Run(context.Context, io.Reader, string, ...string) ([]byte, error) {
+	return nil, &host.RunError{Cmd: "tmux", Err: errors.New("exit status 1"), Stderr: "no server running on /tmp/tmux-1000/default"}
+}
+func (noTmux) Interactive(name string, args ...string) *exec.Cmd { return exec.Command(name, args...) }
+
+type stubProv struct{ sessions []provider.Session }
+
+func (stubProv) Name() string { return "claude" }
+func (p stubProv) Discover(context.Context, host.Executor) ([]provider.Session, error) {
+	return p.sessions, nil
+}
+func (stubProv) Load(context.Context, host.Executor, provider.Session, int) (provider.Transcript, error) {
+	return provider.Transcript{Messages: []provider.Message{{Role: provider.RoleUser, Text: "hello"}}}, nil
+}
+func (stubProv) Running(context.Context, host.Executor) (map[string]provider.Process, error) {
+	return map[string]provider.Process{"b": {PID: 42, SessionID: "b", Status: "busy"}}, nil
+}
+func (stubProv) ResumeCmd(s provider.Session) []string { return []string{"claude", "--resume", s.ID} }
+func (stubProv) NewCmd(id string) []string             { return []string{"claude", "--session-id", id} }
+
+func newTestModel(t *testing.T, width, height int) *Model {
+	t.Helper()
+	sessions := []provider.Session{
+		{ID: "a", Host: "local", Title: "Deploy the API", CWD: "/srv/infra", Messages: 2, CostUSD: 0.5, HasCost: true, LastActive: testNow.Add(-2 * time.Hour)},
+		{ID: "b", Host: "local", Title: "Fix login bug", CWD: "/srv/web", Messages: 2, CostUSD: 3, HasCost: true, LastActive: testNow.Add(-time.Minute * 5)},
+		{ID: "c", Host: "local", Title: "Write docs", CWD: "/srv/web", Messages: 2, LastActive: testNow.Add(-72 * time.Hour)},
+	}
+	mgr := manager.New(noTmux{}, stubProv{sessions}, tmux.New(noTmux{}, ""), "cc-")
+	m := New(Options{Manager: mgr, Config: config.Default()})
+	m.now = func() time.Time { return testNow }
+	m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	snap, err := mgr.Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Update(scanMsg{snap: snap})
+	return m
+}
+
+func press(m *Model, keys ...string) {
+	for _, k := range keys {
+		var msg tea.KeyPressMsg
+		switch k {
+		case "enter":
+			msg = tea.KeyPressMsg{Code: tea.KeyEnter}
+		case "esc":
+			msg = tea.KeyPressMsg{Code: tea.KeyEscape}
+		default:
+			r := []rune(k)[0]
+			msg = tea.KeyPressMsg{Code: r, Text: k}
+		}
+		m.Update(msg)
+	}
+}
+
+// titles returns the session titles in list order.
+func titles(m *Model) []string {
+	var out []string
+	for _, r := range m.rows {
+		if r.item >= 0 {
+			out = append(out, m.items[r.item].Session.Title)
+		}
+	}
+	return out
+}
+
+func TestViewFitsTerminal(t *testing.T) {
+	for _, size := range [][2]int{{160, 40}, {120, 30}, {99, 24}, {60, 12}} {
+		m := newTestModel(t, size[0], size[1])
+		for _, mode := range []func(){func() {}, func() { press(m, "?") }, func() { press(m, "/", "x") }} {
+			mode()
+			lines := strings.Split(m.render(), "\n")
+			if len(lines) != size[1] {
+				t.Errorf("%dx%d: %d lines", size[0], size[1], len(lines))
+			}
+			for i, l := range lines {
+				if w := lipgloss.Width(l); w > size[0] {
+					t.Errorf("%dx%d: line %d is %d wide: %q", size[0], size[1], i, w, l)
+				}
+			}
+		}
+	}
+}
+
+func TestListAndPreview(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	if got := strings.Join(titles(m), ","); got != "Fix login bug,Deploy the API,Write docs" {
+		t.Errorf("order by activity = %s", got)
+	}
+	out := m.render()
+	// Session b has a process but no tmux session, so it is external.
+	for _, want := range []string{"▲ external", "○ saved", "$3.00", "live tmux pane · tab: transcript", "pid 42", "outside tmux"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("view lacks %q", want)
+		}
+	}
+
+	press(m, "?")
+	if help := m.render(); !strings.Contains(help, "C-b d") || !strings.Contains(help, "return to asm") {
+		t.Error("help lacks the detach hint")
+	}
+	press(m, "q") // any key closes help
+
+	if narrow := newTestModel(t, 90, 30).render(); strings.Contains(narrow, "transcript ·") {
+		t.Error("preview shown on a narrow terminal")
+	}
+}
+
+func TestKeys(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+
+	press(m, "s") // sort by cost
+	if got := strings.Join(titles(m), ","); got != "Fix login bug,Deploy the API,Write docs" {
+		t.Errorf("order by cost = %s", got)
+	}
+	press(m, "s") // by project
+	if got := strings.Join(titles(m), ","); got != "Deploy the API,Fix login bug,Write docs" {
+		t.Errorf("order by project = %s", got)
+	}
+
+	if !strings.Contains(m.render(), "▾ Today (2)") {
+		t.Error("not grouped by last by default")
+	}
+	press(m, "S", "S") // last → none → project
+	if !strings.Contains(m.render(), "▾ /srv/web (2)") {
+		t.Error("group header missing")
+	}
+	press(m, "G")
+	if it := m.selected(); it == nil || it.Session.Title != "Write docs" {
+		t.Errorf("bottom selected %+v", it)
+	}
+
+	press(m, "/", "d", "o", "c", "s", "enter")
+	if got := strings.Join(titles(m), ","); got != "Write docs" {
+		t.Errorf("filtered = %s", got)
+	}
+	press(m, "esc")
+	if len(titles(m)) != 3 {
+		t.Error("esc did not clear the filter")
+	}
+
+	// x on a session without tmux reports an error instead of a dialog.
+	press(m, "x")
+	if m.dialog != nil || m.statusLevel != levelError {
+		t.Errorf("kill without tmux: dialog=%v status=%q", m.dialog, m.status)
+	}
+}
+
+func TestExternalResumeAsks(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	p := provider.Process{PID: 42, SessionID: "b"}
+	m.onResumeReady(resumeReadyMsg{err: &manager.ExternalError{Process: p}, session: provider.Session{ID: "b", Title: "Fix login bug"}})
+	if m.dialog == nil || !strings.Contains(m.dialog.body, "pid 42") {
+		t.Fatalf("dialog = %+v", m.dialog)
+	}
+	press(m, "n")
+	if m.dialog != nil {
+		t.Error("n did not close the dialog")
+	}
+}
+
+func TestPinKey(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	store, err := pins.Load(filepath.Join(t.TempDir(), "pins.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.pins = store
+
+	press(m, "G") // select the oldest session, "Write docs"
+	press(m, "P")
+	if !store.Has("local", "c") {
+		t.Fatal("P did not pin the selected session")
+	}
+	out := m.render()
+	if !strings.Contains(out, "▾ Pinned (1)") || !strings.Contains(out, strings.Repeat("─", 20)) {
+		t.Error("pinned group or divider missing")
+	}
+	if got := strings.Join(titles(m), ","); got != "Write docs,Fix login bug,Deploy the API" {
+		t.Errorf("order = %s", got)
+	}
+	if it := m.selected(); it == nil || it.Session.ID != "c" {
+		t.Error("selection did not follow the pinned session")
+	}
+
+	press(m, "P")
+	if store.Has("local", "c") || strings.Contains(m.render(), "Pinned") {
+		t.Error("P did not unpin")
+	}
+}
