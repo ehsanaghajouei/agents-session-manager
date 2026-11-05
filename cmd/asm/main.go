@@ -15,6 +15,7 @@ import (
 	"github.com/ehsanaghajouei/agents-session-manager/internal/host"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/index"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/pins"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider/claude"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/tmux"
@@ -74,6 +75,10 @@ func run() error {
 	if err != nil {
 		warnings = append(warnings, "pinning disabled: "+err.Error())
 	}
+	nameStore, err := names.Load(filepath.Join(configDir, "names.json"))
+	if err != nil {
+		warnings = append(warnings, "renaming disabled: "+err.Error())
+	}
 
 	var changes <-chan struct{}
 	w, err := watch.New(time.Second, []string{prov.SessionsDir()}, []string{prov.ProjectsDir()})
@@ -91,6 +96,7 @@ func run() error {
 		AfterScan: cache.Save,
 		Warnings:  warnings,
 		Pins:      pinStore,
+		Names:     nameStore,
 	})
 	if _, err := tea.NewProgram(m).Run(); err != nil {
 		return err

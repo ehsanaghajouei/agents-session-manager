@@ -163,8 +163,13 @@ func (m *Model) previewHeader(it manager.Item, width int) []string {
 		id += sep + s.Name
 	}
 
+	title := st.strong.Render(oneLine(s.DisplayTitle()))
+	if it.Alias != "" {
+		title = st.strong.Render(oneLine(it.Alias)) + sep + title
+	}
+
 	lines := []string{
-		st.strong.Render(oneLine(s.DisplayTitle())),
+		title,
 		label("State") + state,
 		label("Dir") + dir,
 		label("Git") + dash(s.GitBranch) + sep + dash(s.Model) + sep + dash(version),

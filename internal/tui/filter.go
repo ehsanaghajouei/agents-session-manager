@@ -24,7 +24,7 @@ type query struct {
 	errs    []string
 }
 
-const filterSyntax = `Filter syntax (words are fuzzy-matched against title, directory and ID):
+const filterSyntax = `Filter syntax (words are fuzzy-matched against name, title, directory and ID):
   status:busy,idle   busy | idle | tmux | external (ext) | saved | running
   project:infra      directory contains "infra"           (alias p:)
   host:local         host contains "local"                (alias h:)
@@ -133,8 +133,8 @@ func filterItems(items []manager.Item, q query) []int {
 	for _, term := range q.terms {
 		src := make([]string, len(idx))
 		for j, i := range idx {
-			s := items[i].Session
-			src[j] = s.DisplayTitle() + " " + s.CWD + " " + s.ID
+			it := items[i]
+			src[j] = it.Alias + " " + it.Session.DisplayTitle() + " " + it.Session.CWD + " " + it.Session.ID
 		}
 		matches := fuzzy.FindNoSort(term, src)
 		next := make([]int, 0, len(matches))

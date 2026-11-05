@@ -22,6 +22,7 @@ import (
 
 	"github.com/ehsanaghajouei/agents-session-manager/internal/config"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/pins"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
 )
@@ -38,6 +39,8 @@ type Options struct {
 	Warnings []string
 	// Pins holds pinned sessions. Nil disables pinning.
 	Pins *pins.Store
+	// Names holds the names given to sessions. Nil disables renaming.
+	Names *names.Store
 }
 
 type statusLevel int
@@ -63,6 +66,7 @@ type Model struct {
 	afterScan func() error
 	startup   []string
 	pins      *pins.Store
+	names     *names.Store
 	keys      keyMap
 	help      help.Model
 	md        *mdRenderer
@@ -119,6 +123,7 @@ func New(o Options) *Model {
 		afterScan:   o.AfterScan,
 		startup:     o.Warnings,
 		pins:        o.Pins,
+		names:       o.Names,
 		keys:        defaultKeys(),
 		help:        help.New(),
 		md:          newMDRenderer(),
@@ -321,6 +326,7 @@ func (m *Model) onScan(msg scanMsg) tea.Cmd {
 		cmds = append(cmds, m.setStatus("scan failed: "+msg.err.Error(), levelError))
 	} else {
 		m.items = msg.snap.Items
+		m.applyNames()
 		m.loaded = true
 		warnings := msg.snap.Warnings
 		if msg.saveErr != nil {
@@ -399,6 +405,63 @@ func (m *Model) togglePin(it manager.Item) tea.Cmd {
 		return m.setStatus("Pinned "+shortID(it.Session.ID), levelInfo)
 	}
 	return m.setStatus("Unpinned "+shortID(it.Session.ID), levelInfo)
+}
+
+// applyNames copies the stored names into the items.
+func (m *Model) applyNames() {
+	if m.names == nil {
+		return
+	}
+	for i := range m.items {
+		s := m.items[i].Session
+		m.items[i].Alias = m.names.Get(s.Host, s.ID)
+	}
+}
+
+// title is the name to show for a session that may not be in the list.
+func (m *Model) title(s provider.Session) string {
+	if m.names != nil {
+		if n := m.names.Get(s.Host, s.ID); n != "" {
+			return n
+		}
+	}
+	return s.DisplayTitle()
+}
+
+func (m *Model) openRenameDialog(it manager.Item) tea.Cmd {
+	if m.names == nil {
+		return m.setStatus("Renaming is unavailable: the names file could not be read at startup.", levelError)
+	}
+	in := textinput.New()
+	in.Prompt = "> "
+	in.SetStyles(textinput.DefaultStyles(m.dark))
+	in.SetWidth(min(max(m.width-16, 20), 80))
+	in.SetValue(oneLine(it.Title()))
+	in.CursorEnd()
+	m.dialog = &dialog{
+		title: "Rename session",
+		body:  "Name shown in asm. Leave empty to show Claude's title again:",
+		input: &in,
+		onYes: func(m *Model, name string) tea.Cmd { return m.rename(it, name) },
+	}
+	return in.Focus()
+}
+
+func (m *Model) rename(it manager.Item, name string) tea.Cmd {
+	name = strings.TrimSpace(name)
+	if name == oneLine(it.Title()) {
+		return nil // unchanged
+	}
+	s := it.Session
+	if err := m.names.Set(s.Host, s.ID, name); err != nil {
+		return m.setStatus("names: "+err.Error(), levelError)
+	}
+	m.applyNames()
+	m.rebuild()
+	if name == "" {
+		return m.setStatus("Removed the name of "+shortID(s.ID), levelInfo)
+	}
+	return m.setStatus("Renamed "+shortID(s.ID), levelInfo)
 }
 
 func (m *Model) selected() *manager.Item {
@@ -596,7 +659,7 @@ func (m *Model) onResumeReady(msg resumeReadyMsg) tea.Cmd {
 			body: fmt.Sprintf("%q is already running as pid %d, outside its tmux session.\n"+
 				"Resuming it now would start a second Claude process writing the same transcript.\n\n"+
 				"Send SIGTERM to pid %d and resume the session in tmux?",
-				oneLine(s.DisplayTitle()), p.PID, p.PID),
+				oneLine(m.title(s)), p.PID, p.PID),
 			onYes: func(m *Model, _ string) tea.Cmd { return m.terminateAndResume(p, s) },
 		}
 		m.status = ""
@@ -731,6 +794,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, k.Pin):
 		if it != nil {
 			return m.togglePin(*it)
+		}
+	case key.Matches(msg, k.Rename):
+		if it != nil {
+			return m.openRenameDialog(*it)
 		}
 	case key.Matches(msg, k.CopyID):
 		if it != nil {

@@ -33,6 +33,7 @@ go build -o asm ./cmd/asm
 | `internal/manager` | Combines sessions, processes and tmux sessions into `Item`s with a `State`; resume, new, kill and terminate. |
 | `internal/watch` | fsnotify watcher with debounce; signals the TUI to rescan. |
 | `internal/pins` | Pinned sessions, stored in `$XDG_CONFIG_HOME/asm/pins.json`. |
+| `internal/names` | Names the user gave sessions, stored in `$XDG_CONFIG_HOME/asm/names.json`. The TUI copies them into `manager.Item.Alias`. |
 | `internal/tui` | Bubble Tea model: list, preview, filter, dialogs, help. |
 
 Adding another agent means a new package under `internal/provider/` that implements `provider.Provider`. The manager and the TUI must not depend on Claude-specific details.

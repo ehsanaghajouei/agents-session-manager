@@ -12,10 +12,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ehsanaghajouei/agents-session-manager/internal/config"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/host"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/pins"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/tmux"
@@ -214,5 +216,59 @@ func TestPinKey(t *testing.T) {
 	press(m, "P")
 	if store.Has("local", "c") || strings.Contains(m.render(), "Pinned") {
 		t.Error("P did not unpin")
+	}
+}
+
+func TestRenameKey(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	store, err := names.Load(filepath.Join(t.TempDir(), "names.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.names = store
+
+	press(m, "G") // "Write docs"
+	press(m, "R")
+	if m.dialog == nil || m.dialog.input == nil || m.dialog.input.Value() != "Write docs" {
+		t.Fatalf("rename dialog = %+v", m.dialog)
+	}
+	press(m, "enter") // unchanged: nothing is stored
+	if got := store.Get("local", "c"); got != "" {
+		t.Errorf("unchanged rename stored %q", got)
+	}
+
+	press(m, "R")
+	m.dialog.input.SetValue("  handbook  ")
+	press(m, "enter")
+	if got := store.Get("local", "c"); got != "handbook" {
+		t.Fatalf("stored name = %q", got)
+	}
+	if out := ansi.Strip(m.render()); !strings.Contains(out, "handbook · Write docs") {
+		t.Error("preview header lacks name · title")
+	}
+	for _, q := range []string{"handbook", "write docs"} {
+		m.setQuery(q)
+		if it := m.selected(); it == nil || it.Session.ID != "c" || len(m.rows) == 0 {
+			t.Errorf("filter %q did not match the renamed session", q)
+		}
+	}
+	m.setQuery("")
+
+	// The list shows the name in place of the title.
+	row := ""
+	for _, l := range strings.Split(m.render(), "\n") {
+		if strings.Contains(l, "/srv/web") && strings.Contains(l, "handbook") {
+			row = l
+		}
+	}
+	if row == "" || strings.Contains(row, "Write docs") {
+		t.Errorf("list row = %q", row)
+	}
+
+	press(m, "R")
+	m.dialog.input.SetValue("")
+	press(m, "enter")
+	if got := store.Get("local", "c"); got != "" || strings.Contains(m.render(), "handbook") {
+		t.Errorf("empty input did not remove the name (%q)", got)
 	}
 }

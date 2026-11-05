@@ -4,7 +4,8 @@ import "charm.land/bubbles/v2/key"
 
 type keyMap struct {
 	Up, Down, PageUp, PageDown, Top, Bottom key.Binding
-	Resume, New, Kill, Pin, CopyID, CopyCmd key.Binding
+	Resume, New, Kill, Pin, Rename          key.Binding
+	CopyID, CopyCmd                         key.Binding
 	Filter, ClearFilter, Sort, Group        key.Binding
 	PreviewMode, TogglePreview              key.Binding
 	ScrollDown, ScrollUp, HalfDown, HalfUp  key.Binding
@@ -26,6 +27,7 @@ func defaultKeys() keyMap {
 		New:           b([]string{"n"}, "n", "new session"),
 		Kill:          b([]string{"x"}, "x", "kill tmux session"),
 		Pin:           b([]string{"P"}, "P", "pin/unpin"),
+		Rename:        b([]string{"R"}, "R", "rename"),
 		CopyID:        b([]string{"y"}, "y", "copy session ID"),
 		CopyCmd:       b([]string{"Y"}, "Y", "copy resume command"),
 		Filter:        b([]string{"/"}, "/", "filter"),
@@ -51,7 +53,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
-		{k.Resume, k.New, k.Kill, k.Pin, k.CopyID, k.CopyCmd, k.Refresh},
+		{k.Resume, k.New, k.Kill, k.Pin, k.Rename, k.CopyID, k.CopyCmd, k.Refresh},
 		{k.Filter, k.ClearFilter, k.Sort, k.Group},
 		{k.PreviewMode, k.TogglePreview, k.ScrollDown, k.ScrollUp, k.HalfDown, k.HalfUp},
 		{k.Help, k.Quit},

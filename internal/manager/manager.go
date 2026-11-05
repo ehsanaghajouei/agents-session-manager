@@ -41,7 +41,16 @@ type Item struct {
 	Process    *provider.Process // nil when not running
 	Tmux       *tmux.Session     // nil when no tmux session exists
 	State      State
-	DirMissing bool // the session's working directory is gone
+	DirMissing bool   // the session's working directory is gone
+	Alias      string // name the user gave the session in asm; set by the caller, not Scan
+}
+
+// Title is the name to show: the alias, else the session's own title.
+func (it Item) Title() string {
+	if it.Alias != "" {
+		return it.Alias
+	}
+	return it.Session.DisplayTitle()
 }
 
 // Snapshot is the result of one scan.

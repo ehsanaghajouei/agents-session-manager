@@ -10,7 +10,7 @@
 
 - **Session list**
   - Columns: status, host, title, project directory, git branch, last activity, cost and short ID.
-  - The title is Claude's generated title, or the first prompt when there is none.
+  - The title is the name you gave the session in `asm`; otherwise Claude's generated title, or the first prompt when there is none.
 - **Live status**
   - Updates automatically when Claude's files change, and polls for running processes.
   - Status values:
@@ -31,6 +31,7 @@
 - **Group:** by last activity (Today, Yesterday, then one group per date), by project, by host, or no grouping.
 - **Filter:** fuzzy text plus field filters for status, project, host and date range.
 - **Pins:** pinned sessions stay in a group at the top of the list.
+- **Rename:** give a session a name that `asm` shows instead of Claude's title. The name is stored by `asm` only; Claude Code does not see it.
 - **Actions:**
   - Resume or attach.
   - Start a new session in a directory.
@@ -82,6 +83,7 @@ On start, sessions are grouped by last activity and sorted by activity, and the 
 | `n` | New session (asks for a directory) |
 | `x` | Kill the session's tmux session |
 | `P` | Pin / unpin |
+| `R` | Rename (an empty name shows Claude's title again) |
 | `y` | Copy the session ID |
 | `Y` | Copy the resume command (`cd <dir> && claude --resume <id>`) |
 | `/` | Filter |
@@ -100,7 +102,7 @@ Inside a session, press the tmux prefix and then `d` (by default `C-b d`) to ret
 
 ### Filter syntax
 
-Plain words are fuzzy-matched against the title, directory and session ID. Every word must match.
+Plain words are fuzzy-matched against the name, title, directory and session ID. Every word must match.
 
 ```
 status:busy,idle   busy | idle | tmux | external (ext) | saved | running
@@ -143,6 +145,7 @@ preview_messages = 20
 |---|---|
 | `$XDG_CONFIG_HOME/asm/config.toml` | Settings (optional). |
 | `$XDG_CONFIG_HOME/asm/pins.json` | Pinned sessions. |
+| `$XDG_CONFIG_HOME/asm/names.json` | Names given to sessions. |
 | `$XDG_CACHE_HOME/asm/index.json` | Cache of parsed transcript metadata. It is safe to delete. |
 
 ## How it works

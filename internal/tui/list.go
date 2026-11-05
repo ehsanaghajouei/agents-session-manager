@@ -183,7 +183,7 @@ type column struct {
 var (
 	colStatus  = column{"STATUS", 10, false, false, func(it manager.Item, _ time.Time) string { return stateLabel(it.State) }}
 	colHost    = column{"HOST", 8, false, false, func(it manager.Item, _ time.Time) string { return it.Session.Host }}
-	colTitle   = column{"TITLE", 0, false, false, func(it manager.Item, _ time.Time) string { return oneLine(it.Session.DisplayTitle()) }}
+	colTitle   = column{"TITLE", 0, false, false, func(it manager.Item, _ time.Time) string { return oneLine(it.Title()) }}
 	colProject = column{"PROJECT", 24, false, true, func(it manager.Item, _ time.Time) string { return shortPath(it.Session.CWD) }}
 	colBranch  = column{"BRANCH", 14, false, false, func(it manager.Item, _ time.Time) string { return it.Session.GitBranch }}
 	colLast    = column{"LAST", 6, true, false, func(it manager.Item, now time.Time) string { return relTime(it.Session.LastActive, now) }}
