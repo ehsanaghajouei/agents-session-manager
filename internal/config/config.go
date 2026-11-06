@@ -1,4 +1,4 @@
-// Package config loads asm settings from ~/.config/asm/config.toml.
+// Package config loads asm settings from config.toml in the config directory.
 package config
 
 import (
@@ -126,7 +126,8 @@ func (c Config) validate() error {
 	return nil
 }
 
-// ConfigDir is $XDG_CONFIG_HOME/asm (default ~/.config/asm).
+// ConfigDir is $XDG_CONFIG_HOME/asm (default ~/.config/asm) on Linux and
+// ~/Library/Application Support/asm on macOS.
 func ConfigDir() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
@@ -135,7 +136,8 @@ func ConfigDir() (string, error) {
 	return filepath.Join(base, appName), nil
 }
 
-// CacheDir is $XDG_CACHE_HOME/asm (default ~/.cache/asm).
+// CacheDir is $XDG_CACHE_HOME/asm (default ~/.cache/asm) on Linux and
+// ~/Library/Caches/asm on macOS.
 func CacheDir() (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {

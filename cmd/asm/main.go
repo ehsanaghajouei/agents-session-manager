@@ -33,7 +33,7 @@ func main() {
 }
 
 func run() error {
-	configPath := flag.String("config", "", "config file (default $XDG_CONFIG_HOME/asm/config.toml)")
+	configPath := flag.String("config", "", "config file (default config.toml in the asm config directory)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {

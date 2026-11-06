@@ -45,12 +45,26 @@
 
 ## Requirements
 
-- Linux. Process detection reads `/proc`.
+- Linux or macOS, on amd64 or arm64.
 - [tmux](https://github.com/tmux/tmux)
 - The [Claude Code](https://claude.com/claude-code) CLI (`claude`) in `PATH`.
-- Go 1.27 or newer, to build.
+- Go 1.27 or newer, only to build from source.
 
 ## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ehsanaghajouei/agents-session-manager/main/install.sh | sh
+```
+
+The script:
+
+- Downloads the latest release for your OS and CPU, checks its SHA-256 checksum, and installs `asm` to `~/.local/bin`.
+- Installs tmux when it is missing: with apt, dnf, yum, pacman, zypper or apk on Linux (using `sudo` unless run as root), and with Homebrew on macOS.
+- Warns when `claude` is not in `PATH`, or when `~/.local/bin` is not in `PATH`.
+
+Run it again to upgrade.
+
+With Go:
 
 ```sh
 go install github.com/ehsanaghajouei/agents-session-manager/cmd/asm@latest
@@ -122,7 +136,12 @@ until:2026-10-01   active up to and including that day, or before 7d ago
 
 ## Configuration
 
-`asm` reads `$XDG_CONFIG_HOME/asm/config.toml` (default `~/.config/asm/config.toml`). The file is optional. Every setting and its default:
+`asm` reads `config.toml` from its config directory. The file is optional.
+
+- Linux: `$XDG_CONFIG_HOME/asm/` (default `~/.config/asm/`)
+- macOS: `~/Library/Application Support/asm/`
+
+Every setting and its default:
 
 ```toml
 # Claude Code's data directory. Default: $CLAUDE_CONFIG_DIR, else ~/.claude
@@ -150,13 +169,15 @@ backup_dir = "~/asm-backups"
 
 ## Files
 
+`<config>` is the config directory above. `<cache>` is `$XDG_CACHE_HOME/asm/` on Linux (default `~/.cache/asm/`) and `~/Library/Caches/asm/` on macOS.
+
 | Path | Contents |
 |---|---|
-| `$XDG_CONFIG_HOME/asm/config.toml` | Settings (optional). |
-| `$XDG_CONFIG_HOME/asm/pins.json` | Pinned sessions. |
-| `$XDG_CONFIG_HOME/asm/names.json` | Names given to sessions. |
-| `$XDG_CONFIG_HOME/asm/hidden.json` | Hidden sessions. |
-| `$XDG_CACHE_HOME/asm/index.json` | Cache of parsed transcript metadata. It is safe to delete. |
+| `<config>/config.toml` | Settings (optional). |
+| `<config>/pins.json` | Pinned sessions. |
+| `<config>/names.json` | Names given to sessions. |
+| `<config>/hidden.json` | Hidden sessions. |
+| `<cache>/index.json` | Cache of parsed transcript metadata. It is safe to delete. |
 
 ## Moving a session to another machine
 
@@ -178,7 +199,7 @@ Claude Code's transcript format is internal and can change between versions, so 
   - Each file is parsed once and cached.
   - Later scans parse only the lines appended since the last scan.
 - **Running sessions:** read from `<claude_dir>/sessions/<pid>.json`.
-  - The process start time is checked, so a reused pid is not mistaken for a live session.
+  - The process start time is checked, so a reused pid is not mistaken for a live session. It comes from `/proc` on Linux and from `ps` on macOS, the same sources Claude Code uses.
   - A session counts as inside tmux only if its process is a descendant of a pane in its own `cc-<id>` tmux session. Otherwise it is `external`.
 - **Resume:** runs `claude --resume <id>` with tmux `new-session`, in the session's original directory. No shell is involved.
 - **New session:** starts `claude --session-id <uuid>`, so the tmux session name is known before Claude starts.
@@ -194,6 +215,16 @@ go test ./...
 ```
 
 The tmux tests start their own tmux server on a private socket and skip when tmux is not installed.
+
+### Releases
+
+Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml`:
+
+1. Runs the tests on Linux and macOS.
+2. Builds `asm_<os>_<arch>.tar.gz` for `linux` and `darwin`, each for `amd64` and `arm64`, plus `checksums.txt`.
+3. Publishes them as a GitHub release.
+
+`install.sh` downloads these files by name.
 
 ## License
 

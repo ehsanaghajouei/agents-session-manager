@@ -53,7 +53,7 @@ func (s Session) DisplayTitle() string {
 // Process is a running agent process attached to a session.
 type Process struct {
 	PID       int
-	StartTime string // /proc start ticks, guards against pid reuse
+	StartTime string // procStart as Claude Code records it, guards against pid reuse
 	SessionID string
 	Status    string // e.g. "busy", "idle"
 	CWD       string
