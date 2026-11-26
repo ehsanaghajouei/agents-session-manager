@@ -25,7 +25,7 @@ type query struct {
 }
 
 const filterSyntax = `Filter syntax (words are fuzzy-matched against name, title, directory and ID):
-  status:busy,idle   busy | idle | tmux | external (ext) | saved | running
+  status:busy,idle   busy | idle | tmux | external (ext) | saved | running | unknown
   project:infra      directory contains "infra"           (alias p:)
   host:local         host contains "local"                (alias h:)
   since:7d           active in the last 30m / 12h / 7d / 2w, or since 2026-10-01
@@ -38,6 +38,7 @@ var stateNames = map[string][]manager.State{
 	"external": {manager.StateExternal},
 	"ext":      {manager.StateExternal},
 	"saved":    {manager.StateSaved},
+	"unknown":  {manager.StateUnknown},
 	"running":  {manager.StateBusy, manager.StateIdle, manager.StateExternal},
 }
 

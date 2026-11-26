@@ -93,6 +93,8 @@ On start, sessions are grouped by last activity and sorted by activity, and the 
 
 Press `v` to switch between Claude Code (the initial view) and OpenCode. Switching to OpenCode may start its local shared service. In the OpenCode view you can browse, filter, sort, pin, rename, hide, and copy session IDs. The preview pane loads recent messages for the selected session. Pins, names, and hidden sessions are stored separately for each provider. Live tmux previews, tmux actions, and backup actions are unavailable in the OpenCode view.
 
+OpenCode shows `external` when the shared local service reports active work and there is no matching `oc-<session-id>` tmux session. It shows `unknown` when activity or tmux status cannot be checked. Idle external clients and private servers are not detected. Hiding an OpenCode session does not stop it.
+
 ### Keys
 
 | Key | Action |
@@ -131,7 +133,7 @@ Inside a session, press the tmux prefix and then `d` (by default `C-b d`) to ret
 Plain words are fuzzy-matched against the name, title, directory and session ID. Every word must match.
 
 ```
-status:busy,idle   busy | idle | tmux | external (ext) | saved | running
+ status:busy,idle   busy | idle | tmux | external (ext) | saved | running | unknown
 project:infra      directory contains "infra"           (alias p:)
 host:local         host contains "local"                (alias h:)
 since:7d           active in the last 30m / 12h / 7d / 2w, or since 2026-10-01

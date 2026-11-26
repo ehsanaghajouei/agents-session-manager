@@ -45,6 +45,7 @@ var statusRank = map[manager.State]int{
 	manager.StateTmux:     2,
 	manager.StateExternal: 3,
 	manager.StateSaved:    4,
+	manager.StateUnknown:  5,
 }
 
 // row is a list line: a session, or (item < 0) a group header or the

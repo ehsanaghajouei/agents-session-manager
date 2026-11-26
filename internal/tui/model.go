@@ -518,6 +518,8 @@ func (m *Model) confirmHide(it manager.Item) tea.Cmd {
 	}
 	body := fmt.Sprintf("Hide %q from the list?\nIts files are kept. U shows hidden sessions.", title)
 	switch {
+	case m.provider == openCodeView:
+		body += "\nThis only changes the list; OpenCode keeps running."
 	case it.Tmux != nil && it.State == manager.StateExternal:
 		body += fmt.Sprintf("\n\nIt is running: asm first kills tmux session %s and sends SIGTERM to pid %d.", it.Tmux.Name, it.Process.PID)
 	case it.Tmux != nil:
@@ -533,9 +535,10 @@ func (m *Model) confirmHide(it manager.Item) tea.Cmd {
 	return nil
 }
 
-// stopAndHide stops the session's tmux session and process, if any, then hides it.
+// stopAndHide stops a Claude session if needed, then hides it. OpenCode
+// activity is server-side and hiding it only changes the local list.
 func (m *Model) stopAndHide(it manager.Item) tea.Cmd {
-	if it.Tmux == nil && it.Process == nil {
+	if m.provider == openCodeView || (it.Tmux == nil && it.Process == nil) {
 		return m.onHide(hideMsg{item: it, hide: true})
 	}
 	mgr := m.mgr
@@ -1404,7 +1407,11 @@ func (m *Model) viewHelp(height int) string {
 			m.st.strong.Render(m.tmuxPrefix+" d")+"  "+m.st.dim.Render("return to asm (tmux detach; Claude keeps running)"),
 			"", m.st.title.Render("States"), strings.Join(legend, "\n"))
 	} else {
-		sections = append(sections, "", m.st.dim.Render("OpenCode lists saved sessions. Live activity is unavailable."))
+		sections = append(sections, "",
+			m.st.dim.Render("OpenCode activity is reported by the shared local service."),
+			m.st.dim.Render("external: active with no matching asm tmux session."),
+			m.st.dim.Render("unknown: activity or tmux status could not be checked."),
+			m.st.dim.Render("Idle external clients and private servers are not detected."))
 	}
 	sections = append(sections,
 		"",

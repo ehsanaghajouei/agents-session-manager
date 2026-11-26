@@ -289,6 +289,47 @@ func TestSwitchBackBeforeScanFinishes(t *testing.T) {
 	}
 }
 
+func TestOpenCodeActivityCanBeFilteredAndHidden(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	hidden, err := idset.Load(filepath.Join(t.TempDir(), "hidden.json"), "hidden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.preferences[openCodeView].Hidden = hidden
+	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
+		return manager.Snapshot{Items: []manager.Item{
+			{Session: provider.Session{Host: "local", ID: "ses_active", Title: "Working"}, State: manager.StateExternal},
+			{Session: provider.Session{Host: "local", ID: "ses_busy", Title: "Managed"}, State: manager.StateBusy,
+				Tmux: &tmux.Session{Name: "oc-ses_busy"}},
+			{Session: provider.Session{Host: "local", ID: "ses_unknown", Title: "Unavailable"}, State: manager.StateUnknown},
+		}}, nil
+	}
+	_, scan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	m.Update(scan())
+	for _, text := range []string{"▲ external", "● busy", "? unknown"} {
+		if !strings.Contains(ansi.Strip(m.render()), text) {
+			t.Errorf("OpenCode view lacks %q", text)
+		}
+	}
+	m.setQuery("status:external")
+	if got := strings.Join(titles(m), ","); got != "Working" {
+		t.Fatalf("external filter = %q", got)
+	}
+	for _, tc := range []struct{ filter, id string }{
+		{"status:external", "ses_active"}, {"status:busy", "ses_busy"},
+	} {
+		m.setQuery(tc.filter)
+		press(m, "H")
+		if m.dialog == nil || !strings.Contains(m.dialog.body, "OpenCode keeps running") {
+			t.Fatal("hide dialog did not explain that activity continues")
+		}
+		press(m, "y")
+		if m.claudeActions != 0 || !hidden.Has("local", tc.id) {
+			t.Fatalf("hide did not stay local for %s", tc.id)
+		}
+	}
+}
+
 func TestOpenCodePreviewDiscardsStaleResults(t *testing.T) {
 	m := newTestModel(t, 140, 30)
 	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {

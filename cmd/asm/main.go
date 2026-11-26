@@ -28,6 +28,8 @@ import (
 
 var version = "dev"
 
+const openCodeTmuxPrefix = "oc-"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "asm:", err)
@@ -55,8 +57,9 @@ func run() error {
 	cache := index.Open(filepath.Join(cacheDir, "index.json"))
 
 	ex := host.Local{}
+	tm := tmux.New(ex, "")
 	prov := claude.New(cfg.ClaudeDir, cfg.ClaudePath, cfg.ClaudeArgs, cache)
-	mgr := manager.New(ex, prov, tmux.New(ex, ""), cfg.TmuxPrefix)
+	mgr := manager.New(ex, prov, tm, cfg.TmuxPrefix)
 	openCode := opencode.NewClient("")
 
 	var warnings []string
@@ -90,7 +93,7 @@ func run() error {
 	m := tui.New(tui.Options{
 		Manager: mgr,
 		ScanOpenCode: func(ctx context.Context) (manager.Snapshot, error) {
-			return manager.ScanSaved(ctx, ex, openCode.Discover)
+			return manager.ScanService(ctx, ex, openCode, tm, openCodeTmuxPrefix)
 		},
 		LoadOpenCode: func(ctx context.Context, s provider.Session, n int) (provider.Transcript, error) {
 			return openCode.Load(ctx, ex, s, n)

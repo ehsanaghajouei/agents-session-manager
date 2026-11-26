@@ -30,10 +30,11 @@ const (
 	StateIdle                  // running in its tmux session, waiting for input
 	StateBusy                  // running in its tmux session, working
 	StateExternal              // running, but not inside its tmux session
+	StateUnknown               // activity or tmux status could not be verified
 )
 
 func (s State) String() string {
-	return [...]string{"saved", "tmux", "idle", "busy", "external"}[s]
+	return [...]string{"saved", "tmux", "idle", "busy", "external", "unknown"}[s]
 }
 
 // Item is one row of the session list.
@@ -58,23 +59,6 @@ func (it Item) Title() string {
 type Snapshot struct {
 	Items    []Item
 	Warnings []string
-}
-
-// ScanSaved makes list rows from a discovery-only provider, without querying
-// tmux or claiming to know whether the sessions are running.
-func ScanSaved(ctx context.Context, ex host.Executor, discover func(context.Context, host.Executor) ([]provider.Session, error)) (Snapshot, error) {
-	sessions, err := discover(ctx, ex)
-	if err != nil && sessions == nil {
-		return Snapshot{}, err
-	}
-	snap := Snapshot{Items: make([]Item, 0, len(sessions))}
-	if err != nil {
-		snap.Warnings = append(snap.Warnings, err.Error())
-	}
-	for _, s := range sessions {
-		snap.Items = append(snap.Items, Item{Session: s, State: StateSaved, DirMissing: s.CWD != "" && !isDir(s.CWD)})
-	}
-	return snap, nil
 }
 
 // ExternalError means a session is already running outside tmux. Resuming it

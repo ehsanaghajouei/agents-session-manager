@@ -48,6 +48,24 @@ func (c *Client) run(ctx context.Context, a ...string) ([]byte, error) {
 // target matches a session name exactly instead of by prefix.
 func target(name string) string { return "=" + name }
 
+// SessionNames lists exact session names without collecting pane details.
+func (c *Client) SessionNames(ctx context.Context) (map[string]bool, error) {
+	names := make(map[string]bool)
+	out, err := c.run(ctx, "list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		if noServer(err) {
+			return names, nil
+		}
+		return nil, err
+	}
+	for _, name := range strings.Split(string(out), "\n") {
+		if name != "" {
+			names[name] = true
+		}
+	}
+	return names, nil
+}
+
 // Sessions lists sessions by name. No running server means no sessions.
 func (c *Client) Sessions(ctx context.Context) (map[string]Session, error) {
 	out, err := c.run(ctx, "list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{session_created}")

@@ -117,6 +117,9 @@ func (m *Model) previewHeader(it manager.Item, width int) []string {
 	}
 
 	state := st.state[it.State].Render(it.State.String())
+	if m.provider == openCodeView && it.State == manager.StateExternal {
+		state += sep + st.dim.Render("active without a matching asm tmux session")
+	}
 	if p := it.Process; p != nil {
 		state += sep + fmt.Sprintf("pid %d", p.PID)
 		if it.State == manager.StateExternal {

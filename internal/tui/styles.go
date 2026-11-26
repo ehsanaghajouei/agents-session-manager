@@ -67,6 +67,7 @@ func newStyles(dark bool) styles {
 			manager.StateTmux:     s().Foreground(blue),
 			manager.StateExternal: s().Foreground(red),
 			manager.StateSaved:    s().Foreground(muted),
+			manager.StateUnknown:  s().Foreground(muted),
 		},
 		help: help.DefaultStyles(dark),
 	}
@@ -83,6 +84,8 @@ func stateLabel(s manager.State) string {
 		return "◆ tmux"
 	case manager.StateExternal:
 		return "▲ external"
+	case manager.StateUnknown:
+		return "? unknown"
 	}
 	return "○ saved"
 }
