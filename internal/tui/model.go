@@ -24,9 +24,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ehsanaghajouei/agents-session-manager/internal/config"
-	"github.com/ehsanaghajouei/agents-session-manager/internal/idset"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
-	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
 )
 
@@ -40,14 +38,10 @@ type Options struct {
 	Changes <-chan struct{}
 	// AfterScan runs in the scan goroutine, e.g. to persist the cache.
 	AfterScan func() error
-	// Warnings are shown once at startup.
-	Warnings []string
-	// Pins holds pinned sessions. Nil disables pinning.
-	Pins *idset.Set
-	// Names holds the names given to sessions. Nil disables renaming.
-	Names *names.Store
-	// Hidden holds hidden sessions. Nil disables hiding.
-	Hidden *idset.Set
+	// Warnings are shown once, when the corresponding view first opens.
+	Warnings, OpenCodeWarnings []string
+	ClaudePreferences          Preferences
+	OpenCodePreferences        Preferences
 }
 
 type statusLevel int
@@ -71,10 +65,6 @@ type Model struct {
 	cfg       config.Config
 	changes   <-chan struct{}
 	afterScan func() error
-	startup   []string
-	pins      *idset.Set
-	names     *names.Store
-	hidden    *idset.Set
 	keys      keyMap
 	help      help.Model
 	md        *mdRenderer
@@ -84,6 +74,9 @@ type Model struct {
 	provider          providerView
 	providerSeq       int
 	providerSelection [numProviderViews]string
+	startup           [numProviderViews][]string
+	preferences       [numProviderViews]Preferences
+	showHidden        [numProviderViews]bool // list hidden sessions too, dimmed
 	claudeActions     int
 
 	width, height int
@@ -92,18 +85,17 @@ type Model struct {
 	dark          bool
 	st            styles
 
-	items      []manager.Item
-	warnings   string
-	rows       []row
-	cursor     int
-	offset     int
-	selID      string
-	sortBy     sortKey
-	groupBy    groupKey
-	query      query
-	filterIn   textinput.Model
-	filtering  bool
-	showHidden bool // list hidden sessions too, dimmed
+	items     []manager.Item
+	warnings  string
+	rows      []row
+	cursor    int
+	offset    int
+	selID     string
+	sortBy    sortKey
+	groupBy   groupKey
+	query     query
+	filterIn  textinput.Model
+	filtering bool
 
 	previewOn   bool
 	live        bool // preview shows the tmux pane instead of the transcript
@@ -138,10 +130,8 @@ func New(o Options) *Model {
 		cfg:          o.Config,
 		changes:      o.Changes,
 		afterScan:    o.AfterScan,
-		startup:      o.Warnings,
-		pins:         o.Pins,
-		names:        o.Names,
-		hidden:       o.Hidden,
+		startup:      [numProviderViews][]string{claudeView: o.Warnings, openCodeView: o.OpenCodeWarnings},
+		preferences:  [numProviderViews]Preferences{claudeView: o.ClaudePreferences, openCodeView: o.OpenCodePreferences},
 		keys:         defaultKeys(),
 		help:         help.New(),
 		md:           newMDRenderer(),
@@ -249,11 +239,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case startMsg:
-		var status tea.Cmd
-		if m.provider == claudeView && len(m.startup) > 0 {
-			status = m.setStatus(strings.Join(m.startup, "; "), levelWarn)
-		}
-		return m, tea.Batch(status, m.scan())
+		return m, m.startView()
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -460,7 +446,7 @@ func waitChanges(ch <-chan struct{}) tea.Cmd {
 // rebuild applies the filter, sort and grouping, keeping the selection.
 func (m *Model) rebuild() {
 	idx := filterItems(m.items, m.query)
-	if !m.showHidden {
+	if !m.showHidden[m.provider] {
 		idx = slices.DeleteFunc(idx, func(i int) bool { return m.isHidden(m.items[i]) })
 	}
 	m.rows = buildRows(m.items, idx, m.sortBy, m.groupBy, m.now(), m.isPinned)
@@ -481,14 +467,16 @@ func (m *Model) rebuild() {
 }
 
 func (m *Model) isPinned(it manager.Item) bool {
-	return m.provider == claudeView && m.pins != nil && m.pins.Has(it.Session.Host, it.Session.ID)
+	pins := m.prefs().Pins
+	return pins != nil && pins.Has(it.Session.Host, it.Session.ID)
 }
 
 func (m *Model) togglePin(it manager.Item) tea.Cmd {
-	if m.pins == nil {
+	pins := m.prefs().Pins
+	if pins == nil {
 		return m.setStatus("Pinning is unavailable: the pins file could not be read at startup.", levelError)
 	}
-	pinned, err := m.pins.Toggle(it.Session.Host, it.Session.ID)
+	pinned, err := pins.Toggle(it.Session.Host, it.Session.ID)
 	if err != nil {
 		return m.setStatus("pins: "+err.Error(), levelError)
 	}
@@ -500,11 +488,12 @@ func (m *Model) togglePin(it manager.Item) tea.Cmd {
 }
 
 func (m *Model) isHidden(it manager.Item) bool {
-	return m.provider == claudeView && m.hidden != nil && m.hidden.Has(it.Session.Host, it.Session.ID)
+	hidden := m.prefs().Hidden
+	return hidden != nil && hidden.Has(it.Session.Host, it.Session.ID)
 }
 
 func (m *Model) confirmHide(it manager.Item) tea.Cmd {
-	if m.hidden == nil {
+	if m.prefs().Hidden == nil {
 		return m.setStatus("Hiding is unavailable: the hidden file could not be read at startup.", levelError)
 	}
 	title := oneLine(it.Title())
@@ -567,7 +556,7 @@ func (m *Model) onHide(msg hideMsg) tea.Cmd {
 	case m.isHidden(msg.item) == msg.hide: // already done, e.g. H pressed twice
 		return tea.Batch(cmds...)
 	}
-	if _, err := m.hidden.Toggle(s.Host, s.ID); err != nil {
+	if _, err := m.prefs().Hidden.Toggle(s.Host, s.ID); err != nil {
 		return tea.Batch(append(cmds, m.setStatus("hidden: "+err.Error(), levelError))...)
 	}
 	m.rebuild()
@@ -706,19 +695,20 @@ func olderVersion(local, v string) bool {
 
 // applyNames copies the stored names into the items.
 func (m *Model) applyNames() {
-	if m.provider != claudeView || m.names == nil {
+	names := m.prefs().Names
+	if names == nil {
 		return
 	}
 	for i := range m.items {
 		s := m.items[i].Session
-		m.items[i].Alias = m.names.Get(s.Host, s.ID)
+		m.items[i].Alias = names.Get(s.Host, s.ID)
 	}
 }
 
 // title is the name to show for a session that may not be in the list.
 func (m *Model) title(s provider.Session) string {
-	if m.names != nil {
-		if n := m.names.Get(s.Host, s.ID); n != "" {
+	if names := m.prefs().Names; names != nil {
+		if n := names.Get(s.Host, s.ID); n != "" {
 			return n
 		}
 	}
@@ -726,13 +716,13 @@ func (m *Model) title(s provider.Session) string {
 }
 
 func (m *Model) openRenameDialog(it manager.Item) tea.Cmd {
-	if m.names == nil {
+	if m.prefs().Names == nil {
 		return m.setStatus("Renaming is unavailable: the names file could not be read at startup.", levelError)
 	}
 	in := m.newInput(oneLine(it.Title()))
 	m.dialog = &dialog{
 		title: "Rename session",
-		body:  "Name shown in asm. Leave empty to show Claude's title again:",
+		body:  "Name shown in asm. Leave empty to show the original title again:",
 		input: &in,
 		onYes: func(m *Model, name string) tea.Cmd { return m.rename(it, name) },
 	}
@@ -745,7 +735,7 @@ func (m *Model) rename(it manager.Item, name string) tea.Cmd {
 		return nil // unchanged
 	}
 	s := it.Session
-	if err := m.names.Set(s.Host, s.ID, name); err != nil {
+	if err := m.prefs().Names.Set(s.Host, s.ID, name); err != nil {
 		return m.setStatus("names: "+err.Error(), levelError)
 	}
 	m.applyNames()
@@ -1124,10 +1114,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case key.Matches(msg, k.Import):
 		return m.openImportDialog()
 	case key.Matches(msg, k.ShowHidden):
-		m.showHidden = !m.showHidden
+		show := !m.showHidden[m.provider]
+		m.showHidden[m.provider] = show
 		m.rebuild()
 		text := "Hidden sessions are not shown"
-		if m.showHidden {
+		if show {
 			text = "Showing hidden sessions"
 		}
 		return tea.Batch(m.setStatus(text, levelInfo), m.syncPreview(true))

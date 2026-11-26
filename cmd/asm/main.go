@@ -73,18 +73,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	pinStore, err := idset.Load(filepath.Join(configDir, "pins.json"), "pins")
-	if err != nil {
-		warnings = append(warnings, "pinning disabled: "+err.Error())
-	}
-	nameStore, err := names.Load(filepath.Join(configDir, "names.json"))
-	if err != nil {
-		warnings = append(warnings, "renaming disabled: "+err.Error())
-	}
-	hiddenSet, err := idset.Load(filepath.Join(configDir, "hidden.json"), "hidden")
-	if err != nil {
-		warnings = append(warnings, "hiding disabled: "+err.Error())
-	}
+	claudePrefs, claudeWarnings := loadPreferences(configDir)
+	warnings = append(warnings, claudeWarnings...)
+	openCodePrefs, openCodeWarnings := loadPreferences(filepath.Join(configDir, "opencode"))
 
 	var changes <-chan struct{}
 	w, err := watch.New(time.Second, []string{prov.SessionsDir()}, []string{prov.ProjectsDir()})
@@ -100,16 +91,33 @@ func run() error {
 		ScanOpenCode: func(ctx context.Context) (manager.Snapshot, error) {
 			return manager.ScanSaved(ctx, ex, openCode.Discover)
 		},
-		Config:    cfg,
-		Changes:   changes,
-		AfterScan: cache.Save,
-		Warnings:  warnings,
-		Pins:      pinStore,
-		Names:     nameStore,
-		Hidden:    hiddenSet,
+		Config:              cfg,
+		Changes:             changes,
+		AfterScan:           cache.Save,
+		Warnings:            warnings,
+		OpenCodeWarnings:    openCodeWarnings,
+		ClaudePreferences:   claudePrefs,
+		OpenCodePreferences: openCodePrefs,
 	})
 	if _, err := tea.NewProgram(m).Run(); err != nil {
 		return err
 	}
 	return cache.Save()
+}
+
+func loadPreferences(dir string) (tui.Preferences, []string) {
+	var warnings []string
+	pins, err := idset.Load(filepath.Join(dir, "pins.json"), "pins")
+	if err != nil {
+		warnings = append(warnings, "pinning disabled: "+err.Error())
+	}
+	sessionNames, err := names.Load(filepath.Join(dir, "names.json"))
+	if err != nil {
+		warnings = append(warnings, "renaming disabled: "+err.Error())
+	}
+	hidden, err := idset.Load(filepath.Join(dir, "hidden.json"), "hidden")
+	if err != nil {
+		warnings = append(warnings, "hiding disabled: "+err.Error())
+	}
+	return tui.Preferences{Pins: pins, Names: sessionNames, Hidden: hidden}, warnings
 }

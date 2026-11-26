@@ -33,8 +33,8 @@ It also lists saved [OpenCode V2](https://opencode.ai/docs/) sessions from the l
 - **Group:** by last activity (Today, Yesterday, then one group per date), by project, by host, or no grouping.
 - **Filter:** fuzzy text plus field filters for status, project, host and date range.
 - **Pins:** pinned sessions stay in a group at the top of the list.
-- **Rename:** give a session a name that `asm` shows instead of Claude's title. The name is stored by `asm` only; Claude Code does not see it.
-- **Hide:** remove a session from the list without touching its files. `U` shows hidden sessions again, dimmed. Hiding a running session stops it first.
+- **Rename:** give a session a name that `asm` shows instead of the original title. The name is stored by `asm` only.
+- **Hide:** remove a session from the list without touching its files. `U` shows hidden sessions again, dimmed. Hiding a running Claude Code session stops it first.
 - **Move sessions between machines:** export a session to a `.tar.gz` file and import it on another machine. See [Moving a session to another machine](#moving-a-session-to-another-machine).
 - **Actions:**
   - Resume or attach.
@@ -91,7 +91,7 @@ asm -version         # print the version
 
 On start, sessions are grouped by last activity and sorted by activity, and the preview shows the live tmux pane. Press `?` in the app for all keys, the status legend and the filter syntax.
 
-Press `v` to switch between Claude Code (the initial view) and OpenCode. Switching to OpenCode may start its local shared service. In the OpenCode view you can browse, filter, sort, and copy session IDs. Preferences, transcript and live previews, tmux actions, and backup actions are unavailable there.
+Press `v` to switch between Claude Code (the initial view) and OpenCode. Switching to OpenCode may start its local shared service. In the OpenCode view you can browse, filter, sort, pin, rename, hide, and copy session IDs. Pins, names, and hidden sessions are stored separately for each provider. Transcript and live previews, tmux actions, and backup actions are unavailable in the OpenCode view.
 
 ### Keys
 
@@ -105,8 +105,8 @@ Press `v` to switch between Claude Code (the initial view) and OpenCode. Switchi
 | `n` | New session (asks for a directory) |
 | `x` | Kill the session's tmux session |
 | `P` | Pin / unpin |
-| `R` | Rename (an empty name shows Claude's title again) |
-| `H` | Hide / unhide (asks first; a running session is stopped before it is hidden) |
+| `R` | Rename (an empty name restores the original title) |
+| `H` | Hide / unhide (asks first; a running Claude Code session is stopped before it is hidden) |
 | `U` | Show or stop showing hidden sessions |
 | `E` | Export the session to a backup file |
 | `I` | Import a backup file |
@@ -180,9 +180,12 @@ backup_dir = "~/asm-backups"
 | Path | Contents |
 |---|---|
 | `<config>/config.toml` | Settings (optional). |
-| `<config>/pins.json` | Pinned sessions. |
-| `<config>/names.json` | Names given to sessions. |
-| `<config>/hidden.json` | Hidden sessions. |
+| `<config>/pins.json` | Pinned Claude Code sessions. |
+| `<config>/names.json` | Names given to Claude Code sessions. |
+| `<config>/hidden.json` | Hidden Claude Code sessions. |
+| `<config>/opencode/pins.json` | Pinned OpenCode sessions. |
+| `<config>/opencode/names.json` | Names given to OpenCode sessions. |
+| `<config>/opencode/hidden.json` | Hidden OpenCode sessions. |
 | `<cache>/index.json` | Cache of parsed transcript metadata. It is safe to delete. |
 
 ## Moving a session to another machine

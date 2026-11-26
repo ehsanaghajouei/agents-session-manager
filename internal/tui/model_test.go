@@ -139,19 +139,20 @@ func TestListAndPreview(t *testing.T) {
 func TestSwitchProvider(t *testing.T) {
 	m := newTestModel(t, 140, 30)
 	dir := t.TempDir()
+	prefs := &m.preferences[claudeView]
 	var err error
-	m.names, err = names.Load(filepath.Join(dir, "names.json"))
+	prefs.Names, err = names.Load(filepath.Join(dir, "names.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.hidden, err = idset.Load(filepath.Join(dir, "hidden.json"), "hidden")
+	prefs.Hidden, err = idset.Load(filepath.Join(dir, "hidden.json"), "hidden")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.names.Set("local", "b", "Claude alias"); err != nil {
+	if err := prefs.Names.Set("local", "b", "Claude alias"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.hidden.Toggle("local", "b"); err != nil {
+	if _, err := prefs.Hidden.Toggle("local", "b"); err != nil {
 		t.Fatal(err)
 	}
 	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
@@ -189,7 +190,7 @@ func TestSwitchProvider(t *testing.T) {
 			t.Errorf("OpenCode view contains %q", text)
 		}
 	}
-	for _, k := range []string{"enter", "n", "x", "P", "R", "H", "U", "Y", "E", "I"} {
+	for _, k := range []string{"enter", "n", "x", "Y", "E", "I"} {
 		press(m, k)
 		if m.dialog != nil || m.claudeActions != 0 || !strings.Contains(m.status, "unavailable for OpenCode") {
 			t.Fatalf("%s was not blocked in OpenCode: status=%q", k, m.status)
@@ -199,6 +200,67 @@ func TestSwitchProvider(t *testing.T) {
 	m.Update(scanBack())
 	if it := m.selected(); it == nil || it.Session.ID == "b" {
 		t.Fatalf("switching back did not restore Claude preferences: %+v", it)
+	}
+}
+
+func TestOpenCodePreferencesWithSameSessionID(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
+		s := provider.Session{Provider: "opencode", Host: "local", ID: "b", Title: "OpenCode fixture"}
+		return manager.Snapshot{Items: []manager.Item{{Session: s}}}, nil
+	}
+	dir := t.TempDir()
+	for view, path := range []string{dir, filepath.Join(dir, "opencode")} {
+		pins, err := idset.Load(filepath.Join(path, "pins.json"), "pins")
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliases, err := names.Load(filepath.Join(path, "names.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		hidden, err := idset.Load(filepath.Join(path, "hidden.json"), "hidden")
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.preferences[view] = Preferences{Pins: pins, Names: aliases, Hidden: hidden}
+	}
+	claude := m.preferences[claudeView]
+	if err := claude.Names.Set("local", "b", "Claude alias"); err != nil {
+		t.Fatal(err)
+	}
+
+	switchView := func() {
+		t.Helper()
+		_, scan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+		m.Update(scan())
+	}
+	switchView()
+	press(m, "P", "R")
+	if m.dialog == nil || m.dialog.input.Value() != "OpenCode fixture" {
+		t.Fatal("rename did not start with the OpenCode title")
+	}
+	m.dialog.input.SetValue("OpenCode alias")
+	press(m, "enter", "H")
+	if m.dialog == nil || m.selected() == nil {
+		t.Fatal("hide did not ask for confirmation")
+	}
+	press(m, "y")
+	if m.selected() != nil {
+		t.Fatal("hidden session is still visible")
+	}
+	press(m, "U")
+	if it := m.selected(); it == nil || !m.isHidden(*it) || !m.isPinned(*it) || it.Title() != "OpenCode alias" {
+		t.Fatalf("OpenCode preferences not applied: %+v", it)
+	}
+	switchView()
+	if it := m.selected(); it == nil || it.Title() != "Claude alias" || m.isPinned(*it) || m.isHidden(*it) || m.showHidden[claudeView] {
+		t.Fatalf("OpenCode preferences leaked into Claude: %+v", it)
+	}
+	switchView()
+	press(m, "H", "y")
+	if it := m.selected(); it == nil || m.isHidden(*it) || !m.isPinned(*it) {
+		t.Fatalf("unhide did not restore the OpenCode session: %+v", it)
 	}
 }
 
@@ -301,7 +363,7 @@ func TestPinKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.pins = store
+	m.preferences[claudeView].Pins = store
 
 	press(m, "G") // select the oldest session, "Write docs"
 	press(m, "P")
@@ -331,7 +393,7 @@ func TestRenameKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.names = store
+	m.preferences[claudeView].Names = store
 
 	press(m, "G") // "Write docs"
 	press(m, "R")
@@ -385,7 +447,7 @@ func TestHideKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.hidden = set
+	m.preferences[claudeView].Hidden = set
 
 	// A running session: the dialog says what gets stopped; n leaves it alone.
 	press(m, "g") // "Fix login bug", external pid 42

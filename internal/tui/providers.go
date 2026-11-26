@@ -1,6 +1,23 @@
 package tui
 
-import tea "charm.land/bubbletea/v2"
+import (
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/ehsanaghajouei/agents-session-manager/internal/idset"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
+)
+
+// Preferences holds one provider's local session preferences. A nil store
+// disables the corresponding action.
+type Preferences struct {
+	Pins   *idset.Set
+	Names  *names.Store
+	Hidden *idset.Set
+}
+
+func (m *Model) prefs() Preferences { return m.preferences[m.provider] }
 
 type providerView int
 
@@ -44,6 +61,15 @@ func (m *Model) switchProvider() tea.Cmd {
 	clear(m.transcripts)
 	clear(m.loading)
 	clear(m.captured)
+	return m.startView()
+}
+
+func (m *Model) startView() tea.Cmd {
+	if warnings := m.startup[m.provider]; len(warnings) > 0 {
+		m.startup[m.provider] = nil
+		status := m.setStatus(m.provider.String()+": "+strings.Join(warnings, "; "), levelWarn)
+		return tea.Batch(status, m.scan())
+	}
 	return m.scan()
 }
 
