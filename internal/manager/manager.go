@@ -130,8 +130,8 @@ func (m *Manager) combine(sessions []provider.Session, procs map[string]provider
 		if t, ok := tms[m.TmuxName(s.ID)]; ok {
 			it.Tmux = &t
 		}
-		// A transcript without messages cannot be resumed meaningfully.
-		if s.Messages == 0 && it.Process == nil && it.Tmux == nil {
+		// Hide known empty transcripts, not sessions whose provider doesn't report a count.
+		if !s.MessageCountUnknown && s.Messages == 0 && it.Process == nil && it.Tmux == nil {
 			return
 		}
 		it.State = m.state(it)

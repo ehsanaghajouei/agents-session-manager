@@ -35,6 +35,9 @@ type Session struct {
 	LinesAdded   int       `json:"linesAdded"`
 	LinesRemoved int       `json:"linesRemoved"`
 	ContinuedIn  string    `json:"continuedIn,omitempty"`
+
+	// MessageCountUnknown distinguishes an unreported count from an empty transcript.
+	MessageCountUnknown bool `json:"messageCountUnknown,omitempty"`
 }
 
 // DisplayTitle is the best human label for the session.

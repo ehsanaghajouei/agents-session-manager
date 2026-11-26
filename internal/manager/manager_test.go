@@ -77,6 +77,7 @@ func newTest(t *testing.T) (*Manager, *fakeExec) {
 			{ID: "foreign", Messages: 3, CWD: "/home/u/proj"},
 			{ID: "tmuxonly", Messages: 3, CWD: "/home/u/proj"},
 			{ID: "empty", Messages: 0, CWD: "/home/u/proj"},
+			{ID: "metadata-only", MessageCountUnknown: true, CWD: "/home/u/proj"},
 			{ID: "gone", Messages: 3, CWD: "/deleted"},
 		},
 		procs: map[string]provider.Process{
@@ -103,14 +104,15 @@ func TestScanStates(t *testing.T) {
 		got[it.Session.ID] = it.State
 	}
 	want := map[string]State{
-		"saved":    StateSaved,
-		"busy":     StateBusy,
-		"external": StateExternal, // no tmux session
-		"foreign":  StateExternal, // tmux session exists, but the process is not in it
-		"tmuxonly": StateTmux,
-		"gone":     StateSaved,
-		"fresh":    StateExternal, // process without a transcript yet
-		orphanID:   StateTmux,     // our tmux session without a transcript yet
+		"saved":         StateSaved,
+		"busy":          StateBusy,
+		"external":      StateExternal, // no tmux session
+		"foreign":       StateExternal, // tmux session exists, but the process is not in it
+		"tmuxonly":      StateTmux,
+		"metadata-only": StateSaved,
+		"gone":          StateSaved,
+		"fresh":         StateExternal, // process without a transcript yet
+		orphanID:        StateTmux,     // our tmux session without a transcript yet
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("states\n got: %v\nwant: %v", got, want)
