@@ -36,6 +36,8 @@ type Options struct {
 	ScanOpenCode func(context.Context) (manager.Snapshot, error)
 	// LoadOpenCode reads the selected OpenCode session's transcript on demand.
 	LoadOpenCode func(context.Context, provider.Session, int) (provider.Transcript, error)
+	// ResumeOpenCode returns the tmux attach command for a saved session.
+	ResumeOpenCode func(context.Context, provider.Session) (*exec.Cmd, error)
 	// Changes signals that Claude's files changed. Nil disables watching.
 	Changes <-chan struct{}
 	// AfterScan runs in the scan goroutine, e.g. to persist the cache.
@@ -74,13 +76,14 @@ type Model struct {
 
 	openCodeScan      func(context.Context) (manager.Snapshot, error)
 	openCodeLoad      func(context.Context, provider.Session, int) (provider.Transcript, error)
+	openCodeResume    func(context.Context, provider.Session) (*exec.Cmd, error)
 	provider          providerView
 	providerSeq       int
 	providerSelection [numProviderViews]string
 	startup           [numProviderViews][]string
 	preferences       [numProviderViews]Preferences
 	showHidden        [numProviderViews]bool // list hidden sessions too, dimmed
-	claudeActions     int
+	pendingActions    int
 
 	width, height int
 	listW, listH  int
@@ -130,28 +133,29 @@ func New(o Options) *Model {
 	fi.Prompt = " / "
 	fi.Placeholder = "words, status:busy, project:name, since:7d"
 	m := &Model{
-		mgr:          o.Manager,
-		openCodeScan: o.ScanOpenCode,
-		openCodeLoad: o.LoadOpenCode,
-		cfg:          o.Config,
-		changes:      o.Changes,
-		afterScan:    o.AfterScan,
-		startup:      [numProviderViews][]string{claudeView: o.Warnings, openCodeView: o.OpenCodeWarnings},
-		preferences:  [numProviderViews]Preferences{claudeView: o.ClaudePreferences, openCodeView: o.OpenCodePreferences},
-		keys:         defaultKeys(),
-		help:         help.New(),
-		md:           newMDRenderer(),
-		now:          time.Now,
-		dark:         true,
-		sortBy:       sortActivity,
-		groupBy:      groupLast,
-		filterIn:     fi,
-		previewOn:    true,
-		live:         true,
-		tmuxPrefix:   "C-b",
-		vp:           viewport.New(),
-		transcripts:  map[transcriptKey]string{},
-		captured:     map[string]string{},
+		mgr:            o.Manager,
+		openCodeScan:   o.ScanOpenCode,
+		openCodeLoad:   o.LoadOpenCode,
+		openCodeResume: o.ResumeOpenCode,
+		cfg:            o.Config,
+		changes:        o.Changes,
+		afterScan:      o.AfterScan,
+		startup:        [numProviderViews][]string{claudeView: o.Warnings, openCodeView: o.OpenCodeWarnings},
+		preferences:    [numProviderViews]Preferences{claudeView: o.ClaudePreferences, openCodeView: o.OpenCodePreferences},
+		keys:           defaultKeys(),
+		help:           help.New(),
+		md:             newMDRenderer(),
+		now:            time.Now,
+		dark:           true,
+		sortBy:         sortActivity,
+		groupBy:        groupLast,
+		filterIn:       fi,
+		previewOn:      true,
+		live:           true,
+		tmuxPrefix:     "C-b",
+		vp:             viewport.New(),
+		transcripts:    map[transcriptKey]string{},
+		captured:       map[string]string{},
 	}
 	m.applyTheme(true)
 	return m
@@ -190,7 +194,7 @@ type (
 		id, text    string
 		err         error
 	}
-	claudeActionMsg struct{ result tea.Msg }
+	pendingActionMsg struct{ result tea.Msg }
 	// resumeReadyMsg carries the attach command once a tmux session exists.
 	resumeReadyMsg struct {
 		cmd     *exec.Cmd
@@ -239,8 +243,8 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if action, ok := msg.(claudeActionMsg); ok {
-		m.claudeActions--
+	if action, ok := msg.(pendingActionMsg); ok {
+		m.pendingActions--
 		msg = action.result
 	}
 	switch msg := msg.(type) {
@@ -322,8 +326,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case execDoneMsg:
 		var cmd tea.Cmd
 		if msg.err != nil {
-			cmd = m.setStatus(fmt.Sprintf("tmux: %v. If Claude exited right away, run it directly to see why: %s",
-				msg.err, m.mgr.ResumeCommand(msg.session)), levelError)
+			text := fmt.Sprintf("tmux: %v", msg.err)
+			if m.provider == claudeView {
+				text += ". If Claude exited right away, run it directly to see why: " + m.mgr.ResumeCommand(msg.session)
+			}
+			cmd = m.setStatus(text, levelError)
 		}
 		return m, tea.Batch(cmd, m.scan())
 
@@ -542,7 +549,7 @@ func (m *Model) stopAndHide(it manager.Item) tea.Cmd {
 		return m.onHide(hideMsg{item: it, hide: true})
 	}
 	mgr := m.mgr
-	return tea.Batch(m.setStatus("Stopping "+shortID(it.Session.ID)+"…", levelInfo), m.claudeAction(func() tea.Msg {
+	return tea.Batch(m.setStatus("Stopping "+shortID(it.Session.ID)+"…", levelInfo), m.pendingAction(func() tea.Msg {
 		msg := hideMsg{item: it, hide: true, stopped: true}
 		if it.Tmux != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -595,7 +602,7 @@ func (m *Model) openExportDialog(it manager.Item) tea.Cmd {
 
 func (m *Model) export(s provider.Session, path string, replace bool) tea.Cmd {
 	mgr := m.mgr
-	return tea.Batch(m.setStatus("Exporting "+shortID(s.ID)+"…", levelInfo), m.claudeAction(func() tea.Msg {
+	return tea.Batch(m.setStatus("Exporting "+shortID(s.ID)+"…", levelInfo), m.pendingAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		return exportMsg{session: s, path: path, err: mgr.Export(ctx, s, path, replace)}
@@ -631,7 +638,7 @@ func (m *Model) openImportDialog() tea.Cmd {
 
 func (m *Model) inspect(path string) tea.Cmd {
 	mgr := m.mgr
-	return m.claudeAction(func() tea.Msg {
+	return m.pendingAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		info, err := mgr.Inspect(ctx, path)
@@ -671,7 +678,7 @@ func (m *Model) onInspect(msg inspectMsg) tea.Cmd {
 
 func (m *Model) importBackup(path string, b provider.BackupInfo, dir string) tea.Cmd {
 	mgr := m.mgr
-	return tea.Batch(m.setStatus("Importing "+shortID(b.SessionID)+"…", levelInfo), m.claudeAction(func() tea.Msg {
+	return tea.Batch(m.setStatus("Importing "+shortID(b.SessionID)+"…", levelInfo), m.pendingAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		return importMsg{id: b.SessionID, err: mgr.Import(ctx, path, b.SessionID, dir, b.Exists)}
@@ -962,11 +969,20 @@ func (m *Model) capture(it manager.Item) tea.Cmd {
 // --- actions ---
 
 func (m *Model) resume(s provider.Session) tea.Cmd {
-	mgr := m.mgr
-	return tea.Batch(m.setStatus("Opening "+shortID(s.ID)+"…", levelInfo), m.claudeAction(func() tea.Msg {
+	resume := m.mgr.Resume
+	if m.provider == openCodeView {
+		if m.openCodeResume == nil {
+			return m.setStatus("Resume is unavailable for OpenCode.", levelInfo)
+		}
+		if m.pendingActions != 0 {
+			return nil
+		}
+		resume = m.openCodeResume
+	}
+	return tea.Batch(m.setStatus("Opening "+shortID(s.ID)+"…", levelInfo), m.pendingAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		cmd, err := mgr.Resume(ctx, s)
+		cmd, err := resume(ctx, s)
 		return resumeReadyMsg{cmd: cmd, err: err, session: s}
 	}))
 }
@@ -974,7 +990,7 @@ func (m *Model) resume(s provider.Session) tea.Cmd {
 func (m *Model) onResumeReady(msg resumeReadyMsg) tea.Cmd {
 	var ext *manager.ExternalError
 	switch {
-	case errors.As(msg.err, &ext):
+	case m.provider == claudeView && errors.As(msg.err, &ext):
 		p, s := ext.Process, msg.session
 		m.dialog = &dialog{
 			title: "Session is running outside tmux",
@@ -991,15 +1007,15 @@ func (m *Model) onResumeReady(msg resumeReadyMsg) tea.Cmd {
 	}
 	m.status = ""
 	s := msg.session
-	m.claudeActions++
+	m.pendingActions++
 	return tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
-		return claudeActionMsg{execDoneMsg{err: err, session: s}}
+		return pendingActionMsg{execDoneMsg{err: err, session: s}}
 	})
 }
 
 func (m *Model) terminateAndResume(p provider.Process, s provider.Session) tea.Cmd {
 	mgr := m.mgr
-	return tea.Batch(m.setStatus(fmt.Sprintf("Stopping pid %d…", p.PID), levelInfo), m.claudeAction(func() tea.Msg {
+	return tea.Batch(m.setStatus(fmt.Sprintf("Stopping pid %d…", p.PID), levelInfo), m.pendingAction(func() tea.Msg {
 		if err := mgr.Terminate(p); err != nil {
 			return resumeReadyMsg{err: err, session: s}
 		}
@@ -1038,7 +1054,7 @@ func (m *Model) openNewDialog() tea.Cmd {
 
 func (m *Model) newSession(dir string) tea.Cmd {
 	mgr := m.mgr
-	return m.claudeAction(func() tea.Msg {
+	return m.pendingAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		id, cmd, err := mgr.New(ctx, dir)
@@ -1058,7 +1074,7 @@ func (m *Model) confirmKill(it manager.Item) tea.Cmd {
 			it.Tmux.Name),
 		onYes: func(m *Model, _ string) tea.Cmd {
 			mgr := m.mgr
-			return m.claudeAction(func() tea.Msg {
+			return m.pendingAction(func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				return actionMsg{text: "Killed tmux session for " + shortID(s.ID), err: mgr.Kill(ctx, s)}
@@ -1412,6 +1428,9 @@ func (m *Model) viewHelp(height int) string {
 			m.st.dim.Render("external: active with no matching asm tmux session."),
 			m.st.dim.Render("unknown: activity or tmux status could not be checked."),
 			m.st.dim.Render("Idle external clients and private servers are not detected."))
+		if m.openCodeResume != nil {
+			sections = append(sections, m.st.dim.Render("Enter resumes or reattaches. Detach with your tmux prefix, then d."))
+		}
 	}
 	sections = append(sections,
 		"",

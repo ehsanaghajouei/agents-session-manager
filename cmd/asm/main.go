@@ -98,6 +98,9 @@ func run() error {
 		LoadOpenCode: func(ctx context.Context, s provider.Session, n int) (provider.Transcript, error) {
 			return openCode.Load(ctx, ex, s, n)
 		},
+		ResumeOpenCode: func(ctx context.Context, s provider.Session) (*exec.Cmd, error) {
+			return manager.ResumeService(ctx, ex, openCode, tm, openCodeTmuxPrefix, s.ID)
+		},
 		Config:              cfg,
 		Changes:             changes,
 		AfterScan:           cache.Save,

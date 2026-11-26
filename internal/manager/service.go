@@ -2,6 +2,9 @@ package manager
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os/exec"
 
 	"github.com/ehsanaghajouei/agents-session-manager/internal/host"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
@@ -12,6 +15,48 @@ import (
 type ServiceProvider interface {
 	Discover(context.Context, host.Executor) ([]provider.Session, error)
 	Active(context.Context, host.Executor) (map[string]bool, error)
+}
+
+// ServiceResumer opens an existing session through a client of the agent service.
+type ServiceResumer interface {
+	Active(context.Context, host.Executor) (map[string]bool, error)
+	SessionDirectory(context.Context, host.Executor, string) (string, error)
+	ResumeArgs(string) ([]string, error)
+}
+
+// ResumeService attaches to a managed pane or checks the shared service before
+// starting a new client. It never stops a running agent.
+func ResumeService(ctx context.Context, ex host.Executor, p ServiceResumer, tm *tmux.Client, prefix, id string) (*exec.Cmd, error) {
+	argv, err := p.ResumeArgs(id)
+	if err != nil {
+		return nil, err
+	}
+	name := prefix + id
+	names, err := tm.SessionNames(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot check tmux: %w", err)
+	}
+	if names[name] {
+		return tm.AttachCmd(name), nil
+	}
+	dir, err := p.SessionDirectory(ctx, ex, id)
+	if err != nil {
+		return nil, err
+	}
+	if !isDir(dir) {
+		return nil, fmt.Errorf("directory %s no longer exists", dir)
+	}
+	active, err := p.Active(ctx, ex)
+	if err != nil {
+		return nil, fmt.Errorf("cannot verify session activity: %w", err)
+	}
+	if active[id] {
+		return nil, errors.New("the session is active outside its managed tmux session; wait for it to finish")
+	}
+	if err := tm.NewSession(ctx, name, dir, argv); err != nil {
+		return nil, err
+	}
+	return tm.AttachCmd(name), nil
 }
 
 // ScanService combines saved sessions and reported activity with exact tmux

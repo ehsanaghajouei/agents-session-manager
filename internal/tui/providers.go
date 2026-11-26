@@ -38,9 +38,9 @@ func (m *Model) switchProvider() tea.Cmd {
 	if m.openCodeScan == nil {
 		return nil
 	}
-	// A Claude action may still need to show a confirmation or attach to tmux.
-	if m.claudeActions > 0 {
-		return m.setStatus("Wait for the Claude Code action to finish before switching providers.", levelInfo)
+	// An action may still need to show a confirmation or attach to tmux.
+	if m.pendingActions > 0 {
+		return m.setStatus("Wait for the "+m.provider.String()+" action to finish before switching providers.", levelInfo)
 	}
 	if cancel := m.scanCancel[m.provider]; cancel != nil {
 		cancel()
@@ -77,6 +77,7 @@ func (m *Model) helpKeys() keyMap {
 	k := m.keys
 	k.SwitchProvider.SetEnabled(m.openCodeScan != nil)
 	if m.provider == openCodeView {
+		k.Resume.SetEnabled(m.openCodeResume != nil)
 		for _, binding := range k.claudeOnly() {
 			binding.SetEnabled(false)
 		}
@@ -84,9 +85,9 @@ func (m *Model) helpKeys() keyMap {
 	return k
 }
 
-// claudeAction keeps the Claude view active until an asynchronous action's
+// pendingAction keeps the provider view active until an asynchronous action's
 // result can be applied.
-func (m *Model) claudeAction(run tea.Cmd) tea.Cmd {
-	m.claudeActions++
-	return func() tea.Msg { return claudeActionMsg{run()} }
+func (m *Model) pendingAction(run tea.Cmd) tea.Cmd {
+	m.pendingActions++
+	return func() tea.Msg { return pendingActionMsg{run()} }
 }

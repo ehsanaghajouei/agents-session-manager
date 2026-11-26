@@ -192,7 +192,7 @@ func TestSwitchProvider(t *testing.T) {
 	}
 	for _, k := range []string{"enter", "n", "x", "Y", "E", "I"} {
 		press(m, k)
-		if m.dialog != nil || m.claudeActions != 0 || !strings.Contains(m.status, "unavailable for OpenCode") {
+		if m.dialog != nil || m.pendingActions != 0 || !strings.Contains(m.status, "unavailable for OpenCode") {
 			t.Fatalf("%s was not blocked in OpenCode: status=%q", k, m.status)
 		}
 	}
@@ -289,6 +289,34 @@ func TestSwitchBackBeforeScanFinishes(t *testing.T) {
 	}
 }
 
+func TestOpenCodeResumeDoesNotOfferToStopProcess(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
+		return manager.Snapshot{Items: []manager.Item{{Session: provider.Session{ID: "ses_selected"}}}}, nil
+	}
+	m.openCodeResume = func(_ context.Context, s provider.Session) (*exec.Cmd, error) {
+		if s.ID != "ses_selected" {
+			t.Fatalf("resume was called for %q", s.ID)
+		}
+		return nil, errors.New("the session is active outside its managed tmux session")
+	}
+	_, scan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	m.Update(scan())
+	if !strings.Contains(ansi.Strip(m.render()), "resume/attach") {
+		t.Fatal("OpenCode resume is missing from help")
+	}
+	_, batch := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	press(m, "v", "enter")
+	if m.provider != openCodeView || m.pendingActions != 1 {
+		t.Fatal("resume was duplicated or provider changed while it was pending")
+	}
+	// The first command is the status timer; run only the resume.
+	m.Update(batch().(tea.BatchMsg)[1]())
+	if m.dialog != nil || m.pendingActions != 0 || !strings.Contains(m.status, "active outside") {
+		t.Fatalf("blocked resume: dialog=%+v, status=%q, pending=%d", m.dialog, m.status, m.pendingActions)
+	}
+}
+
 func TestOpenCodeActivityCanBeFilteredAndHidden(t *testing.T) {
 	m := newTestModel(t, 140, 30)
 	hidden, err := idset.Load(filepath.Join(t.TempDir(), "hidden.json"), "hidden")
@@ -324,7 +352,7 @@ func TestOpenCodeActivityCanBeFilteredAndHidden(t *testing.T) {
 			t.Fatal("hide dialog did not explain that activity continues")
 		}
 		press(m, "y")
-		if m.claudeActions != 0 || !hidden.Has("local", tc.id) {
+		if m.pendingActions != 0 || !hidden.Has("local", tc.id) {
 			t.Fatalf("hide did not stay local for %s", tc.id)
 		}
 	}
@@ -372,7 +400,7 @@ func TestOpenCodePreviewDiscardsStaleResults(t *testing.T) {
 func TestSwitchWaitsForClaudeAction(t *testing.T) {
 	m := newTestModel(t, 100, 24)
 	m.openCodeScan = func(context.Context) (manager.Snapshot, error) { return manager.Snapshot{}, nil }
-	action := m.claudeAction(func() tea.Msg { return actionMsg{err: errors.New("fixture failure")} })
+	action := m.pendingAction(func() tea.Msg { return actionMsg{err: errors.New("fixture failure")} })
 	press(m, "v")
 	if m.provider != claudeView || !strings.Contains(m.status, "Wait for the Claude Code action") {
 		t.Fatal("switched with a Claude action in flight")

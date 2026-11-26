@@ -33,6 +33,71 @@ func (*failingTmux) Run(context.Context, io.Reader, string, ...string) ([]byte, 
 	return nil, errors.New("cannot list tmux sessions")
 }
 
+type serviceResumeFixture struct {
+	dir         string
+	dirErr      error
+	activityErr error
+	active      bool
+	calls       []string
+}
+
+func (*serviceResumeFixture) ResumeArgs(id string) ([]string, error) {
+	return []string{"/test/opencode", "--session", id}, nil
+}
+
+func (p *serviceResumeFixture) SessionDirectory(context.Context, host.Executor, string) (string, error) {
+	p.calls = append(p.calls, "directory")
+	return p.dir, p.dirErr
+}
+
+func (p *serviceResumeFixture) Active(context.Context, host.Executor) (map[string]bool, error) {
+	p.calls = append(p.calls, "activity")
+	return map[string]bool{"ses_saved": p.active}, p.activityErr
+}
+
+func TestResumeService(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		names       string
+		active      bool
+		activityErr error
+		dirErr      error
+		wantErr     string
+		wantCalls   []string
+		wantNew     bool
+	}{
+		{name: "reattach", names: "oc-ses_saved\n", active: true},
+		{name: "new pane", names: "oc-ses_saved-other\n", wantCalls: []string{"directory", "activity"}, wantNew: true},
+		{name: "active", active: true, wantErr: "active outside", wantCalls: []string{"directory", "activity"}},
+		{name: "activity unavailable", activityErr: errors.New("unavailable"), wantErr: "cannot verify session activity", wantCalls: []string{"directory", "activity"}},
+		{name: "session missing", dirErr: errors.New("session not found"), wantErr: "session not found", wantCalls: []string{"directory"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TMUX", "")
+			ex := &fakeExec{sessions: tt.names}
+			p := &serviceResumeFixture{dir: t.TempDir(), dirErr: tt.dirErr, active: tt.active, activityErr: tt.activityErr}
+			cmd, err := ResumeService(t.Context(), ex, p, tmux.New(ex, ""), "oc-", "ses_saved")
+			if tt.wantErr != "" {
+				if cmd != nil || err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ResumeService = %v, %v; want %q", cmd, err, tt.wantErr)
+				}
+			} else if err != nil || cmd == nil || !slices.Equal(cmd.Args, []string{"tmux", "attach-session", "-t", "=oc-ses_saved"}) {
+				t.Fatalf("ResumeService = %v, %v; want exact attach", cmd, err)
+			}
+			if !slices.Equal(p.calls, tt.wantCalls) {
+				t.Fatalf("service calls = %q; want %q", p.calls, tt.wantCalls)
+			}
+			wantTmux := [][]string{{"tmux", "list-sessions", "-F", "#{session_name}"}}
+			if tt.wantNew {
+				wantTmux = append(wantTmux, []string{"tmux", "new-session", "-d", "-s", "oc-ses_saved", "-c", p.dir, "/test/opencode", "--session", "ses_saved"})
+			}
+			if !slices.EqualFunc(ex.calls, wantTmux, slices.Equal[[]string]) {
+				t.Fatalf("tmux calls = %q; want %q", ex.calls, wantTmux)
+			}
+		})
+	}
+}
+
 func TestScanServiceActivity(t *testing.T) {
 	ex := &fakeExec{
 		sessions: "oc-ses_busy\noc-ses_managed\noc-ses_external-suffix\ncc-ses_external\n",

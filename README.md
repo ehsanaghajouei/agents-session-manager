@@ -91,7 +91,9 @@ asm -version         # print the version
 
 On start, sessions are grouped by last activity and sorted by activity, and the preview shows the live tmux pane. Press `?` in the app for all keys, the status legend and the filter syntax.
 
-Press `v` to switch between Claude Code (the initial view) and OpenCode. Switching to OpenCode may start its local shared service. In the OpenCode view you can browse, filter, sort, pin, rename, hide, and copy session IDs. The preview pane loads recent messages for the selected session. Pins, names, and hidden sessions are stored separately for each provider. Live tmux previews, tmux actions, and backup actions are unavailable in the OpenCode view.
+Press `v` to switch between Claude Code (the initial view) and OpenCode. Switching to OpenCode may start its local shared service. In the OpenCode view you can browse, filter, sort, pin, rename, hide, and copy session IDs. The preview pane loads recent messages for the selected session. Pins, names, and hidden sessions are stored separately for each provider.
+
+Press `enter` to resume an OpenCode session in tmux or reattach to its existing `oc-<session-id>` session. Before starting a new pane, `asm` checks the shared service and refuses to launch if the session is active or its activity cannot be verified. New-session, kill, live tmux preview, and backup actions are not yet available for OpenCode.
 
 OpenCode shows `external` when the shared local service reports active work and there is no matching `oc-<session-id>` tmux session. It shows `unknown` when activity or tmux status cannot be checked. Idle external clients and private servers are not detected. Hiding an OpenCode session does not stop it.
 
