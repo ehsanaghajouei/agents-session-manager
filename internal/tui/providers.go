@@ -78,6 +78,7 @@ func (m *Model) helpKeys() keyMap {
 	k.SwitchProvider.SetEnabled(m.openCodeScan != nil)
 	if m.provider == openCodeView {
 		k.Resume.SetEnabled(m.openCodeResume != nil)
+		k.New.SetEnabled(m.openCodeNew != nil)
 		for _, binding := range k.claudeOnly() {
 			binding.SetEnabled(false)
 		}

@@ -33,6 +33,88 @@ func (*failingTmux) Run(context.Context, io.Reader, string, ...string) ([]byte, 
 	return nil, errors.New("cannot list tmux sessions")
 }
 
+type serviceCreateFixture struct {
+	dir string
+	err error
+}
+
+func (p *serviceCreateFixture) Create(_ context.Context, _ host.Executor, dir string) (string, error) {
+	p.dir = dir
+	return "ses_created", p.err
+}
+
+func (*serviceCreateFixture) ResumeArgs(id string) ([]string, error) {
+	return []string{"/test/opencode", "--session", id}, nil
+}
+
+type launchTmux struct {
+	fakeExec
+	err error
+}
+
+func (ex *launchTmux) Run(ctx context.Context, in io.Reader, bin string, args ...string) ([]byte, error) {
+	out, err := ex.fakeExec.Run(ctx, in, bin, args...)
+	if args[0] == "new-session" && ex.err != nil {
+		return nil, ex.err
+	}
+	return out, err
+}
+
+func TestNewService(t *testing.T) {
+	for _, tt := range []struct {
+		name, wantID, wantError string
+		badDir, badTmux         bool
+		createErr, launchErr    error
+	}{
+		{name: "success", wantID: "ses_created"},
+		{name: "tmux launch failed", wantID: "ses_created", launchErr: errors.New("cannot open"), wantError: "was saved but could not open"},
+		{name: "bad directory", badDir: true, wantError: "is not a directory"},
+		{name: "tmux unavailable", badTmux: true, wantError: "cannot check tmux"},
+		{name: "create failed", createErr: errors.New("cannot create"), wantError: "cannot create"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TMUX", "")
+			dir := t.TempDir()
+			if tt.badDir {
+				dir += "/missing"
+			}
+			ex := &launchTmux{err: tt.launchErr}
+			var executor host.Executor = ex
+			if tt.badTmux {
+				executor = &failingTmux{}
+			}
+			p := &serviceCreateFixture{err: tt.createErr}
+			id, cmd, err := NewService(t.Context(), executor, p, tmux.New(executor, ""), "oc-", dir)
+			if id != tt.wantID || (err != nil) != (tt.wantError != "") || (err != nil && !strings.Contains(err.Error(), tt.wantError)) {
+				t.Fatalf("NewService = %q, %v, %v; want %q, %q", id, cmd, err, tt.wantID, tt.wantError)
+			}
+			if tt.wantError == "" {
+				if cmd == nil || !slices.Equal(cmd.Args, []string{"tmux", "attach-session", "-t", "=oc-ses_created"}) {
+					t.Fatalf("unexpected attach command: %v", cmd)
+				}
+			} else if cmd != nil {
+				t.Fatalf("unexpected attach on failure: %v", cmd)
+			}
+			if tt.badDir || tt.badTmux {
+				if p.dir != "" {
+					t.Fatalf("created a session despite failed preflight: %q", p.dir)
+				}
+				return
+			}
+			if p.dir != dir {
+				t.Fatalf("create directory = %q; want %q", p.dir, dir)
+			}
+			want := [][]string{{"tmux", "list-sessions", "-F", "#{session_name}"}}
+			if tt.wantID != "" {
+				want = append(want, []string{"tmux", "new-session", "-d", "-s", "oc-ses_created", "-c", dir, "/test/opencode", "--session", "ses_created"})
+			}
+			if !slices.EqualFunc(ex.calls, want, slices.Equal[[]string]) {
+				t.Fatalf("tmux calls = %q; want %q", ex.calls, want)
+			}
+		})
+	}
+}
+
 type serviceResumeFixture struct {
 	dir         string
 	dirErr      error

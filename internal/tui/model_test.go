@@ -317,6 +317,35 @@ func TestOpenCodeResumeDoesNotOfferToStopProcess(t *testing.T) {
 	}
 }
 
+func TestOpenCodeNewSavedSessionOnLaunchFailure(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	project := filepath.Join(t.TempDir(), "chosen project")
+	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
+		return manager.Snapshot{Items: []manager.Item{{Session: provider.Session{ID: "ses_old", CWD: project}}}}, nil
+	}
+	m.openCodeNew = func(_ context.Context, dir string) (string, *exec.Cmd, error) {
+		if dir != project {
+			t.Fatalf("create directory = %q; want %q", dir, project)
+		}
+		return "ses_new", nil, errors.New("session ses_new was saved but could not open in tmux")
+	}
+	_, scan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	m.Update(scan())
+	press(m, "n")
+	if m.dialog == nil || m.dialog.title != "New OpenCode session" || m.dialog.input.Value() != project {
+		t.Fatalf("unexpected new session dialog: %+v", m.dialog)
+	}
+	_, create := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	press(m, "n", "v")
+	if m.dialog != nil || m.provider != openCodeView || m.pendingActions != 1 {
+		t.Fatal("creation was duplicated or provider changed while it was pending")
+	}
+	_, refresh := m.Update(create())
+	if refresh == nil || m.selID != "ses_new" || m.pendingActions != 0 || !strings.Contains(m.status, "was saved but could not open") {
+		t.Fatalf("creation failure: selected=%q, status=%q, pending=%d", m.selID, m.status, m.pendingActions)
+	}
+}
+
 func TestOpenCodeActivityCanBeFilteredAndHidden(t *testing.T) {
 	m := newTestModel(t, 140, 30)
 	hidden, err := idset.Load(filepath.Join(t.TempDir(), "hidden.json"), "hidden")

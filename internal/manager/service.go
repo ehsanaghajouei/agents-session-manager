@@ -24,6 +24,40 @@ type ServiceResumer interface {
 	ResumeArgs(string) ([]string, error)
 }
 
+// ServiceCreator creates a saved session and builds the argv to open it.
+type ServiceCreator interface {
+	Create(context.Context, host.Executor, string) (string, error)
+	ResumeArgs(string) ([]string, error)
+}
+
+// NewService creates a saved session before opening its tmux pane. If opening
+// fails after creation, the session remains saved and its ID is returned.
+func NewService(ctx context.Context, ex host.Executor, p ServiceCreator, tm *tmux.Client, prefix, dir string) (string, *exec.Cmd, error) {
+	dir, err := expandDir(dir)
+	if err != nil {
+		return "", nil, err
+	}
+	if _, err := tm.SessionNames(ctx); err != nil {
+		return "", nil, fmt.Errorf("cannot check tmux: %w", err)
+	}
+	id, err := p.Create(ctx, ex, dir)
+	if err != nil {
+		return "", nil, err
+	}
+	openFailed := func(err error) (string, *exec.Cmd, error) {
+		return id, nil, fmt.Errorf("session %s was saved but could not open in tmux: %w", id, err)
+	}
+	argv, err := p.ResumeArgs(id)
+	if err != nil {
+		return openFailed(err)
+	}
+	name := prefix + id
+	if err := tm.NewSession(ctx, name, dir, argv); err != nil {
+		return openFailed(err)
+	}
+	return id, tm.AttachCmd(name), nil
+}
+
 // ResumeService attaches to a managed pane or checks the shared service before
 // starting a new client. It never stops a running agent.
 func ResumeService(ctx context.Context, ex host.Executor, p ServiceResumer, tm *tmux.Client, prefix, id string) (*exec.Cmd, error) {

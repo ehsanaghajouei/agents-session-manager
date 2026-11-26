@@ -101,6 +101,9 @@ func run() error {
 		ResumeOpenCode: func(ctx context.Context, s provider.Session) (*exec.Cmd, error) {
 			return manager.ResumeService(ctx, ex, openCode, tm, openCodeTmuxPrefix, s.ID)
 		},
+		NewOpenCode: func(ctx context.Context, dir string) (string, *exec.Cmd, error) {
+			return manager.NewService(ctx, ex, openCode, tm, openCodeTmuxPrefix, dir)
+		},
 		Config:              cfg,
 		Changes:             changes,
 		AfterScan:           cache.Save,

@@ -38,6 +38,8 @@ type Options struct {
 	LoadOpenCode func(context.Context, provider.Session, int) (provider.Transcript, error)
 	// ResumeOpenCode returns the tmux attach command for a saved session.
 	ResumeOpenCode func(context.Context, provider.Session) (*exec.Cmd, error)
+	// NewOpenCode creates a session and returns its ID and attach command.
+	NewOpenCode func(context.Context, string) (string, *exec.Cmd, error)
 	// Changes signals that Claude's files changed. Nil disables watching.
 	Changes <-chan struct{}
 	// AfterScan runs in the scan goroutine, e.g. to persist the cache.
@@ -77,6 +79,7 @@ type Model struct {
 	openCodeScan      func(context.Context) (manager.Snapshot, error)
 	openCodeLoad      func(context.Context, provider.Session, int) (provider.Transcript, error)
 	openCodeResume    func(context.Context, provider.Session) (*exec.Cmd, error)
+	openCodeNew       func(context.Context, string) (string, *exec.Cmd, error)
 	provider          providerView
 	providerSeq       int
 	providerSelection [numProviderViews]string
@@ -137,6 +140,7 @@ func New(o Options) *Model {
 		openCodeScan:   o.ScanOpenCode,
 		openCodeLoad:   o.LoadOpenCode,
 		openCodeResume: o.ResumeOpenCode,
+		openCodeNew:    o.NewOpenCode,
 		cfg:            o.Config,
 		changes:        o.Changes,
 		afterScan:      o.AfterScan,
@@ -200,6 +204,7 @@ type (
 		cmd     *exec.Cmd
 		err     error
 		session provider.Session
+		created bool
 	}
 	execDoneMsg struct {
 		err     error
@@ -988,6 +993,9 @@ func (m *Model) resume(s provider.Session) tea.Cmd {
 }
 
 func (m *Model) onResumeReady(msg resumeReadyMsg) tea.Cmd {
+	if msg.created {
+		m.selID = msg.session.ID
+	}
 	var ext *manager.ExternalError
 	switch {
 	case m.provider == claudeView && errors.As(msg.err, &ext):
@@ -1003,7 +1011,11 @@ func (m *Model) onResumeReady(msg resumeReadyMsg) tea.Cmd {
 		m.status = ""
 		return nil
 	case msg.err != nil:
-		return m.setStatus(msg.err.Error(), levelError)
+		status := m.setStatus(msg.err.Error(), levelError)
+		if msg.created {
+			return tea.Batch(status, m.scan())
+		}
+		return status
 	}
 	m.status = ""
 	s := msg.session
@@ -1038,14 +1050,24 @@ func (m *Model) newInput(value string) textinput.Model {
 }
 
 func (m *Model) openNewDialog() tea.Cmd {
+	label := "Claude"
+	if m.provider == openCodeView {
+		if m.openCodeNew == nil {
+			return m.setStatus("New session is unavailable for OpenCode.", levelInfo)
+		}
+		if m.pendingActions != 0 {
+			return nil
+		}
+		label = m.provider.String()
+	}
 	dir, _ := os.Getwd()
 	if it := m.selected(); it != nil && it.Session.CWD != "" && !it.DirMissing {
 		dir = it.Session.CWD
 	}
 	in := m.newInput(shortPath(dir))
 	m.dialog = &dialog{
-		title: "New Claude session",
-		body:  "Directory to start Claude in:",
+		title: "New " + label + " session",
+		body:  "Directory to start " + label + " in:",
 		input: &in,
 		onYes: func(m *Model, dir string) tea.Cmd { return m.newSession(dir) },
 	}
@@ -1053,12 +1075,17 @@ func (m *Model) openNewDialog() tea.Cmd {
 }
 
 func (m *Model) newSession(dir string) tea.Cmd {
-	mgr := m.mgr
+	start := m.mgr.New
+	timeout := 10 * time.Second
+	openCode := m.provider == openCodeView
+	if openCode {
+		start, timeout = m.openCodeNew, 30*time.Second
+	}
 	return m.pendingAction(func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		id, cmd, err := mgr.New(ctx, dir)
-		return resumeReadyMsg{cmd: cmd, err: err, session: provider.Session{ID: id, CWD: dir}}
+		id, cmd, err := start(ctx, dir)
+		return resumeReadyMsg{cmd: cmd, err: err, session: provider.Session{ID: id, CWD: dir}, created: openCode && id != ""}
 	})
 }
 

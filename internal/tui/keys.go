@@ -68,7 +68,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 
 func (k *keyMap) claudeOnly() []*key.Binding {
 	return []*key.Binding{
-		&k.New, &k.Kill,
+		&k.Kill,
 		&k.CopyCmd, &k.Export, &k.Import, &k.PreviewMode,
 	}
 }

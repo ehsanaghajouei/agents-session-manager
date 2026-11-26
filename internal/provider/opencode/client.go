@@ -55,13 +55,17 @@ func (c *Client) Info(ctx context.Context, ex host.Executor) (ServerInfo, error)
 }
 
 func (c *Client) get(ctx context.Context, ex host.Executor, path string, dst any) error {
+	return c.request(ctx, ex, path, dst, "get", path)
+}
+
+func (c *Client) request(ctx context.Context, ex host.Executor, path string, dst any, args ...string) error {
 	if !ex.IsLocal() {
 		return errors.New("opencode: remote hosts are not supported")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	out, err := ex.Run(ctx, nil, c.bin, "api", "get", path)
+	out, err := ex.Run(ctx, nil, c.bin, append([]string{"api"}, args...)...)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
