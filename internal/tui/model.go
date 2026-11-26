@@ -34,6 +34,8 @@ import (
 type Options struct {
 	Manager *manager.Manager
 	Config  config.Config
+	// ScanOpenCode is called only when the OpenCode view is selected.
+	ScanOpenCode func(context.Context) (manager.Snapshot, error)
 	// Changes signals that Claude's files changed. Nil disables watching.
 	Changes <-chan struct{}
 	// AfterScan runs in the scan goroutine, e.g. to persist the cache.
@@ -78,6 +80,12 @@ type Model struct {
 	md        *mdRenderer
 	now       func() time.Time
 
+	openCodeScan      func(context.Context) (manager.Snapshot, error)
+	provider          providerView
+	providerSeq       int
+	providerSelection [numProviderViews]string
+	claudeActions     int
+
 	width, height int
 	listW, listH  int
 	prevW         int
@@ -115,7 +123,8 @@ type Model struct {
 	statusLevel statusLevel
 	statusSeq   int
 
-	scanning, rescan, loaded bool
+	scanCancel                 [numProviderViews]context.CancelFunc
+	rescan, loaded, scanFailed bool
 }
 
 // New builds the model.
@@ -124,29 +133,30 @@ func New(o Options) *Model {
 	fi.Prompt = " / "
 	fi.Placeholder = "words, status:busy, project:name, since:7d"
 	m := &Model{
-		mgr:         o.Manager,
-		cfg:         o.Config,
-		changes:     o.Changes,
-		afterScan:   o.AfterScan,
-		startup:     o.Warnings,
-		pins:        o.Pins,
-		names:       o.Names,
-		hidden:      o.Hidden,
-		keys:        defaultKeys(),
-		help:        help.New(),
-		md:          newMDRenderer(),
-		now:         time.Now,
-		dark:        true,
-		sortBy:      sortActivity,
-		groupBy:     groupLast,
-		filterIn:    fi,
-		previewOn:   true,
-		live:        true,
-		tmuxPrefix:  "C-b",
-		vp:          viewport.New(),
-		transcripts: map[transcriptKey]string{},
-		loading:     map[transcriptKey]bool{},
-		captured:    map[string]string{},
+		mgr:          o.Manager,
+		openCodeScan: o.ScanOpenCode,
+		cfg:          o.Config,
+		changes:      o.Changes,
+		afterScan:    o.AfterScan,
+		startup:      o.Warnings,
+		pins:         o.Pins,
+		names:        o.Names,
+		hidden:       o.Hidden,
+		keys:         defaultKeys(),
+		help:         help.New(),
+		md:           newMDRenderer(),
+		now:          time.Now,
+		dark:         true,
+		sortBy:       sortActivity,
+		groupBy:      groupLast,
+		filterIn:     fi,
+		previewOn:    true,
+		live:         true,
+		tmuxPrefix:   "C-b",
+		vp:           viewport.New(),
+		transcripts:  map[transcriptKey]string{},
+		loading:      map[transcriptKey]bool{},
+		captured:     map[string]string{},
 	}
 	m.applyTheme(true)
 	return m
@@ -162,23 +172,29 @@ func (m *Model) applyTheme(dark bool) {
 // --- messages ---
 
 type (
-	scanMsg struct {
-		snap    manager.Snapshot
-		err     error
-		saveErr error
+	startMsg struct{}
+	scanMsg  struct {
+		provider providerView
+		seq      int
+		snap     manager.Snapshot
+		err      error
+		saveErr  error
 	}
 	tickMsg       struct{}
 	changesMsg    struct{}
 	previewDueMsg struct{ seq int }
 	transcriptMsg struct {
-		key     transcriptKey
-		content string
+		providerSeq int
+		key         transcriptKey
+		content     string
 	}
 	captureTickMsg struct{}
 	captureMsg     struct {
-		id, text string
-		err      error
+		providerSeq int
+		id, text    string
+		err         error
 	}
+	claudeActionMsg struct{ result tea.Msg }
 	// resumeReadyMsg carries the attach command once a tmux session exists.
 	resumeReadyMsg struct {
 		cmd     *exec.Cmd
@@ -219,18 +235,26 @@ type (
 )
 
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.scan(), m.tick(), captureTick(), tea.RequestBackgroundColor}
+	cmds := []tea.Cmd{func() tea.Msg { return startMsg{} }, m.tick(), captureTick(), tea.RequestBackgroundColor}
 	if m.changes != nil {
 		cmds = append(cmds, waitChanges(m.changes))
-	}
-	if len(m.startup) > 0 {
-		cmds = append(cmds, m.setStatus(strings.Join(m.startup, "; "), levelWarn))
 	}
 	return tea.Batch(cmds...)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if action, ok := msg.(claudeActionMsg); ok {
+		m.claudeActions--
+		msg = action.result
+	}
 	switch msg := msg.(type) {
+	case startMsg:
+		var status tea.Cmd
+		if m.provider == claudeView && len(m.startup) > 0 {
+			status = m.setStatus(strings.Join(m.startup, "; "), levelWarn)
+		}
+		return m, tea.Batch(status, m.scan())
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
@@ -247,7 +271,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.tick(), m.scan())
 
 	case changesMsg:
-		return m, tea.Batch(waitChanges(m.changes), m.scan())
+		wait := waitChanges(m.changes)
+		if m.provider == claudeView {
+			return m, tea.Batch(wait, m.scan())
+		}
+		return m, wait
 
 	case previewDueMsg:
 		if msg.seq != m.previewSeq {
@@ -256,6 +284,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.syncPreview(true)
 
 	case transcriptMsg:
+		if msg.providerSeq != m.providerSeq {
+			return m, nil
+		}
 		delete(m.loading, msg.key)
 		if len(m.transcripts) > 64 {
 			clear(m.transcripts)
@@ -274,6 +305,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(captureTick(), cmd)
 
 	case captureMsg:
+		if msg.providerSeq != m.providerSeq {
+			return m, nil
+		}
 		m.capturing = false
 		text := liveText(msg.text)
 		if msg.err != nil {
@@ -342,29 +376,43 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // --- scanning ---
 
 func (m *Model) scan() tea.Cmd {
-	if m.scanning {
+	view, seq := m.provider, m.providerSeq
+	if m.scanCancel[view] != nil {
 		m.rescan = true
 		return nil
 	}
-	m.scanning = true
-	mgr, after := m.mgr, m.afterScan
+	scan, after := m.mgr.Scan, m.afterScan
+	if view == openCodeView {
+		scan, after = m.openCodeScan, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.scanCancel[view] = cancel
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		snap, err := mgr.Scan(ctx)
+		ctx, timeout := context.WithTimeout(ctx, 30*time.Second)
+		defer timeout()
+		snap, err := scan(ctx)
 		var saveErr error
-		if after != nil {
+		if after != nil && ctx.Err() == nil {
 			saveErr = after()
 		}
-		return scanMsg{snap: snap, err: err, saveErr: saveErr}
+		return scanMsg{provider: view, seq: seq, snap: snap, err: err, saveErr: saveErr}
 	}
 }
 
 func (m *Model) onScan(msg scanMsg) tea.Cmd {
-	m.scanning = false
+	m.scanCancel[msg.provider] = nil
+	if msg.provider != m.provider {
+		return nil
+	}
+	if msg.seq != m.providerSeq {
+		m.rescan = false
+		return m.scan()
+	}
 	var cmds []tea.Cmd
+	m.scanFailed = msg.err != nil
 	if msg.err != nil {
-		cmds = append(cmds, m.setStatus("scan failed: "+msg.err.Error(), levelError))
+		cmds = append(cmds, m.setStatus(m.provider.String()+" scan failed: "+msg.err.Error(), levelError))
 	} else {
 		m.items = msg.snap.Items
 		m.applyNames()
@@ -377,7 +425,7 @@ func (m *Model) onScan(msg scanMsg) tea.Cmd {
 		if w := strings.Join(warnings, "; "); w != m.warnings {
 			m.warnings = w
 			if w != "" {
-				cmds = append(cmds, m.setStatus(w, levelWarn))
+				cmds = append(cmds, m.setStatus(m.provider.String()+": "+w, levelWarn))
 			}
 		}
 		m.rebuild()
@@ -433,7 +481,7 @@ func (m *Model) rebuild() {
 }
 
 func (m *Model) isPinned(it manager.Item) bool {
-	return m.pins != nil && m.pins.Has(it.Session.Host, it.Session.ID)
+	return m.provider == claudeView && m.pins != nil && m.pins.Has(it.Session.Host, it.Session.ID)
 }
 
 func (m *Model) togglePin(it manager.Item) tea.Cmd {
@@ -452,7 +500,7 @@ func (m *Model) togglePin(it manager.Item) tea.Cmd {
 }
 
 func (m *Model) isHidden(it manager.Item) bool {
-	return m.hidden != nil && m.hidden.Has(it.Session.Host, it.Session.ID)
+	return m.provider == claudeView && m.hidden != nil && m.hidden.Has(it.Session.Host, it.Session.ID)
 }
 
 func (m *Model) confirmHide(it manager.Item) tea.Cmd {
@@ -491,7 +539,7 @@ func (m *Model) stopAndHide(it manager.Item) tea.Cmd {
 		return m.onHide(hideMsg{item: it, hide: true})
 	}
 	mgr := m.mgr
-	return tea.Batch(m.setStatus("Stopping "+shortID(it.Session.ID)+"…", levelInfo), func() tea.Msg {
+	return tea.Batch(m.setStatus("Stopping "+shortID(it.Session.ID)+"…", levelInfo), m.claudeAction(func() tea.Msg {
 		msg := hideMsg{item: it, hide: true, stopped: true}
 		if it.Tmux != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -504,7 +552,7 @@ func (m *Model) stopAndHide(it manager.Item) tea.Cmd {
 			msg.err = mgr.Terminate(*it.Process)
 		}
 		return msg
-	})
+	}))
 }
 
 func (m *Model) onHide(msg hideMsg) tea.Cmd {
@@ -544,11 +592,11 @@ func (m *Model) openExportDialog(it manager.Item) tea.Cmd {
 
 func (m *Model) export(s provider.Session, path string, replace bool) tea.Cmd {
 	mgr := m.mgr
-	return tea.Batch(m.setStatus("Exporting "+shortID(s.ID)+"…", levelInfo), func() tea.Msg {
+	return tea.Batch(m.setStatus("Exporting "+shortID(s.ID)+"…", levelInfo), m.claudeAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		return exportMsg{session: s, path: path, err: mgr.Export(ctx, s, path, replace)}
-	})
+	}))
 }
 
 func (m *Model) onExport(msg exportMsg) tea.Cmd {
@@ -580,12 +628,12 @@ func (m *Model) openImportDialog() tea.Cmd {
 
 func (m *Model) inspect(path string) tea.Cmd {
 	mgr := m.mgr
-	return func() tea.Msg {
+	return m.claudeAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		info, err := mgr.Inspect(ctx, path)
 		return inspectMsg{path: path, info: info, err: err}
-	}
+	})
 }
 
 // onInspect asks where the backup's project lives on this system, with any
@@ -620,11 +668,11 @@ func (m *Model) onInspect(msg inspectMsg) tea.Cmd {
 
 func (m *Model) importBackup(path string, b provider.BackupInfo, dir string) tea.Cmd {
 	mgr := m.mgr
-	return tea.Batch(m.setStatus("Importing "+shortID(b.SessionID)+"…", levelInfo), func() tea.Msg {
+	return tea.Batch(m.setStatus("Importing "+shortID(b.SessionID)+"…", levelInfo), m.claudeAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		return importMsg{id: b.SessionID, err: mgr.Import(ctx, path, b.SessionID, dir, b.Exists)}
-	})
+	}))
 }
 
 func (m *Model) onImport(msg importMsg) tea.Cmd {
@@ -658,7 +706,7 @@ func olderVersion(local, v string) bool {
 
 // applyNames copies the stored names into the items.
 func (m *Model) applyNames() {
-	if m.names == nil {
+	if m.provider != claudeView || m.names == nil {
 		return
 	}
 	for i := range m.items {
@@ -830,6 +878,9 @@ func (m *Model) syncPreview(load bool) tea.Cmd {
 }
 
 func (m *Model) previewContent(it manager.Item, load bool) (string, bool, tea.Cmd) {
+	if m.provider == openCodeView {
+		return m.st.dim.Render("Transcript and live previews are unavailable for OpenCode."), true, nil
+	}
 	if m.live {
 		if it.Tmux == nil {
 			return m.st.dim.Render("No tmux session for this conversation.\nPress enter to resume it in tmux, or tab for the transcript."), true, nil
@@ -856,14 +907,15 @@ func (m *Model) previewContent(it manager.Item, load bool) (string, bool, tea.Cm
 
 func (m *Model) loadTranscript(s provider.Session, key transcriptKey) tea.Cmd {
 	mgr, n, st, md := m.mgr, m.cfg.PreviewMessages, m.st, m.md
+	seq := m.providerSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		t, err := mgr.Load(ctx, s, n)
 		if err != nil {
-			return transcriptMsg{key, st.errText.Render("Cannot read transcript: " + err.Error())}
+			return transcriptMsg{seq, key, st.errText.Render("Cannot read transcript: " + err.Error())}
 		}
-		return transcriptMsg{key, renderTranscript(t, key.width, key.dark, st, md)}
+		return transcriptMsg{seq, key, renderTranscript(t, key.width, key.dark, st, md)}
 	}
 }
 
@@ -872,12 +924,12 @@ func (m *Model) capture(it manager.Item) tea.Cmd {
 		return nil
 	}
 	m.capturing = true
-	mgr, s := m.mgr, it.Session
+	mgr, s, seq := m.mgr, it.Session, m.providerSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		text, err := mgr.Capture(ctx, s)
-		return captureMsg{id: s.ID, text: text, err: err}
+		return captureMsg{providerSeq: seq, id: s.ID, text: text, err: err}
 	}
 }
 
@@ -885,12 +937,12 @@ func (m *Model) capture(it manager.Item) tea.Cmd {
 
 func (m *Model) resume(s provider.Session) tea.Cmd {
 	mgr := m.mgr
-	return tea.Batch(m.setStatus("Opening "+shortID(s.ID)+"…", levelInfo), func() tea.Msg {
+	return tea.Batch(m.setStatus("Opening "+shortID(s.ID)+"…", levelInfo), m.claudeAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		cmd, err := mgr.Resume(ctx, s)
 		return resumeReadyMsg{cmd: cmd, err: err, session: s}
-	})
+	}))
 }
 
 func (m *Model) onResumeReady(msg resumeReadyMsg) tea.Cmd {
@@ -913,12 +965,15 @@ func (m *Model) onResumeReady(msg resumeReadyMsg) tea.Cmd {
 	}
 	m.status = ""
 	s := msg.session
-	return tea.ExecProcess(msg.cmd, func(err error) tea.Msg { return execDoneMsg{err: err, session: s} })
+	m.claudeActions++
+	return tea.ExecProcess(msg.cmd, func(err error) tea.Msg {
+		return claudeActionMsg{execDoneMsg{err: err, session: s}}
+	})
 }
 
 func (m *Model) terminateAndResume(p provider.Process, s provider.Session) tea.Cmd {
 	mgr := m.mgr
-	return tea.Batch(m.setStatus(fmt.Sprintf("Stopping pid %d…", p.PID), levelInfo), func() tea.Msg {
+	return tea.Batch(m.setStatus(fmt.Sprintf("Stopping pid %d…", p.PID), levelInfo), m.claudeAction(func() tea.Msg {
 		if err := mgr.Terminate(p); err != nil {
 			return resumeReadyMsg{err: err, session: s}
 		}
@@ -926,7 +981,7 @@ func (m *Model) terminateAndResume(p provider.Process, s provider.Session) tea.C
 		defer cancel()
 		cmd, err := mgr.Resume(ctx, s)
 		return resumeReadyMsg{cmd: cmd, err: err, session: s}
-	})
+	}))
 }
 
 // newInput returns a dialog input holding value, with the cursor at its end.
@@ -957,12 +1012,12 @@ func (m *Model) openNewDialog() tea.Cmd {
 
 func (m *Model) newSession(dir string) tea.Cmd {
 	mgr := m.mgr
-	return func() tea.Msg {
+	return m.claudeAction(func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		id, cmd, err := mgr.New(ctx, dir)
 		return resumeReadyMsg{cmd: cmd, err: err, session: provider.Session{ID: id, CWD: dir}}
-	}
+	})
 }
 
 func (m *Model) confirmKill(it manager.Item) tea.Cmd {
@@ -977,11 +1032,11 @@ func (m *Model) confirmKill(it manager.Item) tea.Cmd {
 			it.Tmux.Name),
 		onYes: func(m *Model, _ string) tea.Cmd {
 			mgr := m.mgr
-			return func() tea.Msg {
+			return m.claudeAction(func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				return actionMsg{text: "Killed tmux session for " + shortID(s.ID), err: mgr.Kill(ctx, s)}
-			}
+			})
 		},
 	}
 	return nil
@@ -1015,10 +1070,19 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	k := m.keys
+	if m.provider == openCodeView {
+		for _, binding := range k.claudeOnly() {
+			if key.Matches(msg, *binding) {
+				return m.setStatus("This action is unavailable for OpenCode.", levelInfo)
+			}
+		}
+	}
 	it := m.selected()
 	switch {
 	case key.Matches(msg, k.Quit):
 		return tea.Quit
+	case key.Matches(msg, k.SwitchProvider):
+		return m.switchProvider()
 	case key.Matches(msg, k.Up):
 		return m.move(-1)
 	case key.Matches(msg, k.Down):
@@ -1117,6 +1181,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.scan()
 	case key.Matches(msg, k.Help):
 		m.showHelp = true
+		if m.provider == openCodeView {
+			return nil
+		}
 		mgr := m.mgr
 		return func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1216,7 +1283,7 @@ func (m *Model) render() string {
 }
 
 func (m *Model) viewTitle() string {
-	left := m.st.title.Render(" asm") + m.st.titleInfo.Render(" · Claude Code sessions")
+	left := m.st.title.Render(" asm") + m.st.titleInfo.Render(" · "+m.provider.String()+" sessions")
 	shown, running, hidden := 0, 0, 0
 	for _, r := range m.rows {
 		if r.item >= 0 {
@@ -1235,9 +1302,15 @@ func (m *Model) viewTitle() string {
 	if hidden > 0 {
 		info += fmt.Sprintf(" · %d hidden", hidden)
 	}
-	info += fmt.Sprintf(" · %d running · sort: %s · group: %s ", running, m.sortBy, m.groupBy)
+	if m.provider == claudeView {
+		info += fmt.Sprintf(" · %d running", running)
+	}
+	info += fmt.Sprintf(" · sort: %s · group: %s ", m.sortBy, m.groupBy)
 	if !m.loaded {
 		info = "scanning… "
+		if m.scanFailed {
+			info = "scan failed "
+		}
 	}
 	right := m.st.titleInfo.Render(info)
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -1270,9 +1343,9 @@ func (m *Model) viewFooter() string {
 		return ansi.Truncate(" "+st.Render(m.status), m.width, "…")
 	}
 	// Drop the least important hints until the line fits.
-	bindings := m.keys.ShortHelp()
-	k := m.keys
-	for _, drop := range []key.Binding{k.PreviewMode, k.Group, k.Sort, k.New, k.Filter} {
+	k := m.helpKeys()
+	bindings := k.ShortHelp()
+	for _, drop := range []key.Binding{k.PreviewMode, k.Group, k.Sort, k.New, k.Filter, k.Resume, k.SwitchProvider} {
 		if line := " " + m.help.ShortHelpView(bindings); lipgloss.Width(line) <= m.width {
 			return line
 		}
@@ -1296,24 +1369,28 @@ func (m *Model) viewHelp(height int) string {
 	const indent = "  "
 	h := m.help
 	h.SetWidth(m.width - len(indent))
-	content := strings.Join([]string{
+	sections := []string{
 		"",
 		m.st.title.Render("Keys"),
-		h.FullHelpView(m.keys.FullHelp()),
-		"",
-		m.st.title.Render("Inside a session"),
-		m.st.strong.Render(m.tmuxPrefix+" d") + "  " + m.st.dim.Render("return to asm (tmux detach; Claude keeps running)"),
-		"",
-		m.st.title.Render("States"),
-		strings.Join(legend, "\n"),
+		h.FullHelpView(m.helpKeys().FullHelp()),
+	}
+	if m.provider == claudeView {
+		sections = append(sections, "",
+			m.st.title.Render("Inside a session"),
+			m.st.strong.Render(m.tmuxPrefix+" d")+"  "+m.st.dim.Render("return to asm (tmux detach; Claude keeps running)"),
+			"", m.st.title.Render("States"), strings.Join(legend, "\n"))
+	} else {
+		sections = append(sections, "", m.st.dim.Render("OpenCode lists saved sessions. Live activity is unavailable."))
+	}
+	sections = append(sections,
 		"",
 		m.st.title.Render("Filter"),
 		m.st.dim.Render(filterSyntax),
 		"",
 		m.st.dim.Render("Press any key to close."),
-	}, "\n")
+	)
 
-	lines := strings.Split(content, "\n")
+	lines := strings.Split(strings.Join(sections, "\n"), "\n")
 	lines = lines[:min(len(lines), height)]
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(indent+l, m.width, "…")

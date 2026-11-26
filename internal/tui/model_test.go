@@ -136,6 +136,112 @@ func TestListAndPreview(t *testing.T) {
 	}
 }
 
+func TestSwitchProvider(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	dir := t.TempDir()
+	var err error
+	m.names, err = names.Load(filepath.Join(dir, "names.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.hidden, err = idset.Load(filepath.Join(dir, "hidden.json"), "hidden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.names.Set("local", "b", "Claude alias"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.hidden.Toggle("local", "b"); err != nil {
+		t.Fatal(err)
+	}
+	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
+		s := provider.Session{ID: "b", Host: "local", Title: "OpenCode fixture"}
+		return manager.Snapshot{Items: []manager.Item{{Session: s}}}, nil
+	}
+
+	m.live = false
+	claudePreview := m.loadTranscript(m.selected().Session, m.transcriptKey(*m.selected()))
+	claudeScan := m.scan()
+	_, openCodeScan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	if m.provider != openCodeView || m.selected() != nil || m.status != "" {
+		t.Fatalf("switch did not reset the view: provider=%v selected=%+v status=%q", m.provider, m.selected(), m.status)
+	}
+	m.Update(openCodeScan())
+	m.Update(claudePreview())
+	m.Update(captureMsg{providerSeq: 0, id: "b", text: "stale pane"})
+	lateScan := claudeScan().(scanMsg)
+	lateScan.err = errors.New("late Claude error")
+	m.Update(lateScan)
+	if got := strings.Join(titles(m), ","); got != "OpenCode fixture" {
+		t.Fatalf("OpenCode rows = %q", got)
+	}
+	if m.status != "" || len(m.transcripts) != 0 || len(m.captured) != 0 {
+		t.Fatalf("stale Claude result applied: status=%q transcripts=%v captured=%v", m.status, m.transcripts, m.captured)
+	}
+	out := ansi.Strip(m.render())
+	for _, text := range []string{"OpenCode sessions", "session details", "switch provider"} {
+		if !strings.Contains(out, text) {
+			t.Errorf("OpenCode view lacks %q", text)
+		}
+	}
+	for _, text := range []string{"Claude alias", "resume/attach", "new session", "0 running"} {
+		if strings.Contains(out, text) {
+			t.Errorf("OpenCode view contains %q", text)
+		}
+	}
+	for _, k := range []string{"enter", "n", "x", "P", "R", "H", "U", "Y", "E", "I"} {
+		press(m, k)
+		if m.dialog != nil || m.claudeActions != 0 || !strings.Contains(m.status, "unavailable for OpenCode") {
+			t.Fatalf("%s was not blocked in OpenCode: status=%q", k, m.status)
+		}
+	}
+	_, scanBack := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	m.Update(scanBack())
+	if it := m.selected(); it == nil || it.Session.ID == "b" {
+		t.Fatalf("switching back did not restore Claude preferences: %+v", it)
+	}
+}
+
+func TestSwitchBackBeforeScanFinishes(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
+		return manager.Snapshot{}, errors.New("OpenCode service unavailable")
+	}
+	claudeScan := m.scan()
+	_, openCodeScan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	m.Update(openCodeScan())
+	if !strings.Contains(m.status, "OpenCode scan failed") {
+		t.Fatalf("OpenCode error not surfaced: %q", m.status)
+	}
+	_, waiting := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	if waiting != nil || m.status != "" {
+		t.Fatalf("switch back did not clear the OpenCode error or wait for Claude: %q", m.status)
+	}
+	_, retry := m.Update(claudeScan())
+	if retry == nil || m.loaded {
+		t.Fatal("an old scan should start a fresh scan instead of applying results")
+	}
+	m.Update(retry())
+	if !m.loaded || len(titles(m)) != 3 {
+		t.Fatal("the fresh Claude scan did not populate the list")
+	}
+}
+
+func TestSwitchWaitsForClaudeAction(t *testing.T) {
+	m := newTestModel(t, 100, 24)
+	m.openCodeScan = func(context.Context) (manager.Snapshot, error) { return manager.Snapshot{}, nil }
+	action := m.claudeAction(func() tea.Msg { return actionMsg{err: errors.New("fixture failure")} })
+	press(m, "v")
+	if m.provider != claudeView || !strings.Contains(m.status, "Wait for the Claude Code action") {
+		t.Fatal("switched with a Claude action in flight")
+	}
+	m.Update(action())
+	press(m, "v")
+	if m.provider != openCodeView || m.status != "" {
+		t.Fatal("could not switch after the Claude action completed")
+	}
+}
+
 func TestKeys(t *testing.T) {
 	m := newTestModel(t, 140, 30)
 

@@ -1,7 +1,8 @@
-// Command asm is a terminal UI for managing Claude Code sessions.
+// Command asm is a terminal UI for browsing and managing agent sessions.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider/claude"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/provider/opencode"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/tmux"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/tui"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/watch"
@@ -45,10 +47,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if fi, err := os.Stat(cfg.ClaudeDir); err != nil || !fi.IsDir() {
-		return fmt.Errorf("Claude data directory %s not found; set claude_dir in the config", cfg.ClaudeDir)
-	}
-
 	cacheDir, err := config.CacheDir()
 	if err != nil {
 		return err
@@ -58,8 +56,12 @@ func run() error {
 	ex := host.Local{}
 	prov := claude.New(cfg.ClaudeDir, cfg.ClaudePath, cfg.ClaudeArgs, cache)
 	mgr := manager.New(ex, prov, tmux.New(ex, ""), cfg.TmuxPrefix)
+	openCode := opencode.NewClient("")
 
 	var warnings []string
+	if fi, err := os.Stat(cfg.ClaudeDir); err != nil || !fi.IsDir() {
+		warnings = append(warnings, fmt.Sprintf("Claude data directory %s not found; set claude_dir in the config", cfg.ClaudeDir))
+	}
 	if _, err := exec.LookPath("tmux"); err != nil {
 		warnings = append(warnings, "tmux not found in PATH; resume and new sessions need it")
 	}
@@ -94,7 +96,10 @@ func run() error {
 	}
 
 	m := tui.New(tui.Options{
-		Manager:   mgr,
+		Manager: mgr,
+		ScanOpenCode: func(ctx context.Context) (manager.Snapshot, error) {
+			return manager.ScanSaved(ctx, ex, openCode.Discover)
+		},
 		Config:    cfg,
 		Changes:   changes,
 		AfterScan: cache.Save,

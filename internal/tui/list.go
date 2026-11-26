@@ -261,12 +261,14 @@ func (m *Model) viewList(width, height int) string {
 	if len(m.rows) == 0 {
 		msg := "No sessions."
 		switch {
+		case !m.loaded && m.scanFailed:
+			msg = "Could not load sessions. Press r to retry."
 		case !m.loaded:
 			msg = "Scanning…"
 		case m.query.raw != "":
 			msg = "No sessions match the filter."
 		}
-		lines = append(lines, m.st.dim.Render(" "+msg))
+		lines = append(lines, m.st.dim.Render(ansi.Truncate(" "+msg, width, "…")))
 	}
 
 	for i := m.offset; i < len(m.rows) && len(lines) < height; i++ {

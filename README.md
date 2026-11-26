@@ -2,6 +2,8 @@
 
 `asm` is a terminal UI for managing [Claude Code](https://claude.com/claude-code) sessions. It lists every session on the machine, both saved ones and running ones, and opens any of them inside tmux.
 
+It also lists saved [OpenCode V2](https://opencode.ai/docs/) sessions from the local shared service.
+
 - Each Claude session runs in its own tmux session, named `cc-<session-id>`.
 - **Enter** suspends `asm` and attaches to that tmux session. Detach with the tmux prefix and **d** to return to `asm`; Claude keeps running.
 - `asm` only reads Claude Code's files, except when you import a session backup.
@@ -48,6 +50,7 @@
 - Linux or macOS, on amd64 or arm64.
 - [tmux](https://github.com/tmux/tmux)
 - The [Claude Code](https://claude.com/claude-code) CLI (`claude`) in `PATH`.
+- For the OpenCode view, the OpenCode V2 CLI (`opencode`) in `PATH`.
 - Go 1.27 or newer, only to build from source.
 
 ## Install
@@ -88,6 +91,8 @@ asm -version         # print the version
 
 On start, sessions are grouped by last activity and sorted by activity, and the preview shows the live tmux pane. Press `?` in the app for all keys, the status legend and the filter syntax.
 
+Press `v` to switch between Claude Code (the initial view) and OpenCode. Switching to OpenCode may start its local shared service. In the OpenCode view you can browse, filter, sort, and copy session IDs. Preferences, transcript and live previews, tmux actions, and backup actions are unavailable there.
+
 ### Keys
 
 | Key | Action |
@@ -95,6 +100,7 @@ On start, sessions are grouped by last activity and sorted by activity, and the 
 | `↑`/`k`, `↓`/`j` | Move up / down |
 | `pgup`/`ctrl+b`, `pgdn`/`ctrl+f` | Page up / down |
 | `g`, `G` | Top / bottom |
+| `v` | Switch between Claude Code and OpenCode |
 | `enter` | Resume or attach |
 | `n` | New session (asks for a directory) |
 | `x` | Kill the session's tmux session |

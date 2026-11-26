@@ -60,6 +60,23 @@ type Snapshot struct {
 	Warnings []string
 }
 
+// ScanSaved makes list rows from a discovery-only provider, without querying
+// tmux or claiming to know whether the sessions are running.
+func ScanSaved(ctx context.Context, ex host.Executor, discover func(context.Context, host.Executor) ([]provider.Session, error)) (Snapshot, error) {
+	sessions, err := discover(ctx, ex)
+	if err != nil && sessions == nil {
+		return Snapshot{}, err
+	}
+	snap := Snapshot{Items: make([]Item, 0, len(sessions))}
+	if err != nil {
+		snap.Warnings = append(snap.Warnings, err.Error())
+	}
+	for _, s := range sessions {
+		snap.Items = append(snap.Items, Item{Session: s, State: StateSaved, DirMissing: s.CWD != "" && !isDir(s.CWD)})
+	}
+	return snap, nil
+}
+
 // ExternalError means a session is already running outside tmux. Resuming it
 // would start a second process writing the same transcript.
 type ExternalError struct {

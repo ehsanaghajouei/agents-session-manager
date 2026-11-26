@@ -154,9 +154,14 @@ func (m *Model) previewHeader(it manager.Item, width int) []string {
 
 	usage := st.dim.Render("no cost data")
 	if s.HasCost {
-		usage = cost(it) + sep + tokens(s.Tokens) + " tokens" + sep + fmt.Sprintf("+%d −%d lines", s.LinesAdded, s.LinesRemoved)
+		usage = cost(it) + sep + tokens(s.Tokens) + " tokens"
 	}
-	usage += sep + fmt.Sprintf("%d prompts", s.Prompts)
+	if m.provider == claudeView {
+		if s.HasCost {
+			usage += sep + fmt.Sprintf("+%d −%d lines", s.LinesAdded, s.LinesRemoved)
+		}
+		usage += sep + fmt.Sprintf("%d prompts", s.Prompts)
+	}
 
 	id := dash(s.ID)
 	if s.Name != "" {
@@ -195,7 +200,9 @@ func (m *Model) viewPreview(height int) string {
 		lines = append(lines, "")
 	}
 	label := " transcript · tab: live "
-	if m.live {
+	if m.provider == openCodeView {
+		label = " session details "
+	} else if m.live {
 		label = " live tmux pane · tab: transcript "
 	}
 	rule := "──" + label + strings.Repeat("─", max(w-ansi.StringWidth(label)-2, 0))
