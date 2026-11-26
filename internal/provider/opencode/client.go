@@ -16,6 +16,13 @@ type Client struct {
 	bin string
 }
 
+type apiPage[T any] struct {
+	Data   []T `json:"data"`
+	Cursor *struct {
+		Next string `json:"next"`
+	} `json:"cursor"`
+}
+
 // NewClient configures a client without contacting or starting the service.
 // An empty bin uses opencode from PATH.
 func NewClient(bin string) *Client {

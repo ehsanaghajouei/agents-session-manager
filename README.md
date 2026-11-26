@@ -91,7 +91,7 @@ asm -version         # print the version
 
 On start, sessions are grouped by last activity and sorted by activity, and the preview shows the live tmux pane. Press `?` in the app for all keys, the status legend and the filter syntax.
 
-Press `v` to switch between Claude Code (the initial view) and OpenCode. Switching to OpenCode may start its local shared service. In the OpenCode view you can browse, filter, sort, pin, rename, hide, and copy session IDs. Pins, names, and hidden sessions are stored separately for each provider. Transcript and live previews, tmux actions, and backup actions are unavailable in the OpenCode view.
+Press `v` to switch between Claude Code (the initial view) and OpenCode. Switching to OpenCode may start its local shared service. In the OpenCode view you can browse, filter, sort, pin, rename, hide, and copy session IDs. The preview pane loads recent messages for the selected session. Pins, names, and hidden sessions are stored separately for each provider. Live tmux previews, tmux actions, and backup actions are unavailable in the OpenCode view.
 
 ### Keys
 
@@ -116,7 +116,7 @@ Press `v` to switch between Claude Code (the initial view) and OpenCode. Switchi
 | `esc` | Clear the filter |
 | `s` | Change sort: activity → cost → project → status |
 | `S` | Change grouping: last → none → project → host |
-| `tab` | Switch the preview between live pane and transcript |
+| `tab` | Switch the Claude Code preview between live pane and transcript |
 | `p` | Show / hide the preview |
 | `J`, `K` | Scroll the preview |
 | `ctrl+d`, `ctrl+u` | Scroll the preview half a page |

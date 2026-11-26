@@ -180,7 +180,7 @@ func TestSwitchProvider(t *testing.T) {
 		t.Fatalf("stale Claude result applied: status=%q transcripts=%v captured=%v", m.status, m.transcripts, m.captured)
 	}
 	out := ansi.Strip(m.render())
-	for _, text := range []string{"OpenCode sessions", "session details", "switch provider"} {
+	for _, text := range []string{"OpenCode sessions", " transcript ", "switch provider"} {
 		if !strings.Contains(out, text) {
 			t.Errorf("OpenCode view lacks %q", text)
 		}
@@ -286,6 +286,45 @@ func TestSwitchBackBeforeScanFinishes(t *testing.T) {
 	m.Update(retry())
 	if !m.loaded || len(titles(m)) != 3 {
 		t.Fatal("the fresh Claude scan did not populate the list")
+	}
+}
+
+func TestOpenCodePreviewDiscardsStaleResults(t *testing.T) {
+	m := newTestModel(t, 140, 30)
+	m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
+		return manager.Snapshot{Items: []manager.Item{
+			{Session: provider.Session{ID: "b", Title: "First session", LastActive: testNow}},
+			{Session: provider.Session{ID: "other", Title: "Second session", LastActive: testNow.Add(-time.Hour)}},
+		}}, nil
+	}
+	canceled := map[string]bool{}
+	m.openCodeLoad = func(ctx context.Context, s provider.Session, n int) (provider.Transcript, error) {
+		if n != m.cfg.PreviewMessages {
+			t.Fatalf("preview count = %d; want %d", n, m.cfg.PreviewMessages)
+		}
+		canceled[s.ID] = ctx.Err() != nil
+		return provider.Transcript{Messages: []provider.Message{{Role: provider.RoleUser, Text: "Preview for " + s.Title}}}, nil
+	}
+	_, scan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	_, first := m.Update(scan())
+	press(m, "G")
+	_, second := m.Update(previewDueMsg{seq: m.previewSeq})
+	m.Update(first())
+	if !canceled["b"] || len(m.transcripts) != 0 || strings.Contains(ansi.Strip(m.vp.View()), "Preview for First session") {
+		t.Fatal("preview for the previous selection was not canceled and discarded")
+	}
+	m.Update(second())
+	if canceled["other"] || !strings.Contains(ansi.Strip(m.vp.View()), "Preview for Second session") {
+		t.Fatal("preview for the current selection did not render")
+	}
+
+	press(m, "g")
+	_, firstAgain := m.Update(previewDueMsg{seq: m.previewSeq})
+	_, claudeScan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	m.Update(claudeScan())
+	m.Update(firstAgain())
+	if !canceled["b"] || len(m.transcripts) != 0 || strings.Contains(ansi.Strip(m.vp.View()), "Preview for First session") {
+		t.Fatal("OpenCode preview leaked into Claude Code after switching")
 	}
 }
 

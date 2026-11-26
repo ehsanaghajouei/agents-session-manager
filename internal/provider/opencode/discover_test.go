@@ -12,7 +12,7 @@ import (
 )
 
 func TestDiscover(t *testing.T) {
-	ex, check := discoveryExecutor(t, `{"version":"2.4.2"}`,
+	ex, check := fixtureExecutor(t, `{"version":"2.4.2"}`,
 		`{"data":[{"id":"ses_one","title":"Fix tests","cost":0.25,"location":{"directory":"/work/project"},
 			"model":{"id":"model-fixture","providerID":"provider-fixture"},
 			"time":{"created":1795712842501,"updated":1795712842670},
@@ -37,7 +37,7 @@ func TestDiscover(t *testing.T) {
 }
 
 func TestDiscoverEmpty(t *testing.T) {
-	ex, check := discoveryExecutor(t, `{"version":"2.4.2"}`, `{"data":[],"cursor":{}}`)
+	ex, check := fixtureExecutor(t, `{"version":"2.4.2"}`, `{"data":[],"cursor":{}}`)
 	got, err := NewClient("").Discover(t.Context(), ex)
 	check("/api/info", "/api/session?order=desc")
 	if got == nil || len(got) != 0 || err != nil {
@@ -77,7 +77,7 @@ func TestDiscoverErrors(t *testing.T) {
 				replies = append(replies, tt.next)
 				paths = append(paths, "/api/session?cursor=cursor")
 			}
-			ex, check := discoveryExecutor(t, replies...)
+			ex, check := fixtureExecutor(t, replies...)
 			got, err := NewClient("").Discover(t.Context(), ex)
 			check(paths...)
 			if err == nil || !strings.Contains(err.Error(), tt.want) || len(got) != tt.wantRows {
@@ -90,7 +90,7 @@ func TestDiscoverErrors(t *testing.T) {
 	}
 }
 
-func discoveryExecutor(t *testing.T, replies ...string) (executor, func(...string)) {
+func fixtureExecutor(t *testing.T, replies ...string) (executor, func(...string)) {
 	t.Helper()
 	var paths []string
 	ex := executor{local: true, run: func(_ context.Context, stdin io.Reader, bin string, args ...string) ([]byte, error) {

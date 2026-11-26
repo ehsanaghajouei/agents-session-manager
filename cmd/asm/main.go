@@ -18,6 +18,7 @@ import (
 	"github.com/ehsanaghajouei/agents-session-manager/internal/index"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/manager"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/names"
+	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider/claude"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider/opencode"
 	"github.com/ehsanaghajouei/agents-session-manager/internal/tmux"
@@ -90,6 +91,9 @@ func run() error {
 		Manager: mgr,
 		ScanOpenCode: func(ctx context.Context) (manager.Snapshot, error) {
 			return manager.ScanSaved(ctx, ex, openCode.Discover)
+		},
+		LoadOpenCode: func(ctx context.Context, s provider.Session, n int) (provider.Transcript, error) {
+			return openCode.Load(ctx, ex, s, n)
 		},
 		Config:              cfg,
 		Changes:             changes,

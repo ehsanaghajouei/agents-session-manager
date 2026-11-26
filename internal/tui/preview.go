@@ -201,8 +201,8 @@ func (m *Model) viewPreview(height int) string {
 	}
 	label := " transcript · tab: live "
 	if m.provider == openCodeView {
-		label = " session details "
-	} else if m.live {
+		label = " transcript "
+	} else if m.livePreview() {
 		label = " live tmux pane · tab: transcript "
 	}
 	rule := "──" + label + strings.Repeat("─", max(w-ansi.StringWidth(label)-2, 0))

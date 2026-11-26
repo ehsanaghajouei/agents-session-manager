@@ -34,6 +34,8 @@ type Options struct {
 	Config  config.Config
 	// ScanOpenCode is called only when the OpenCode view is selected.
 	ScanOpenCode func(context.Context) (manager.Snapshot, error)
+	// LoadOpenCode reads the selected OpenCode session's transcript on demand.
+	LoadOpenCode func(context.Context, provider.Session, int) (provider.Transcript, error)
 	// Changes signals that Claude's files changed. Nil disables watching.
 	Changes <-chan struct{}
 	// AfterScan runs in the scan goroutine, e.g. to persist the cache.
@@ -71,6 +73,7 @@ type Model struct {
 	now       func() time.Time
 
 	openCodeScan      func(context.Context) (manager.Snapshot, error)
+	openCodeLoad      func(context.Context, provider.Session, int) (provider.Transcript, error)
 	provider          providerView
 	providerSeq       int
 	providerSelection [numProviderViews]string
@@ -97,15 +100,17 @@ type Model struct {
 	filterIn  textinput.Model
 	filtering bool
 
-	previewOn   bool
-	live        bool // preview shows the tmux pane instead of the transcript
-	vp          viewport.Model
-	previewID   string
-	previewSeq  int
-	transcripts map[transcriptKey]string
-	loading     map[transcriptKey]bool
-	captured    map[string]string
-	capturing   bool
+	previewOn         bool
+	live              bool // Claude preview shows the tmux pane instead of the transcript
+	vp                viewport.Model
+	previewID         string
+	previewSeq        int
+	transcripts       map[transcriptKey]string
+	transcriptCancel  context.CancelFunc
+	transcriptPending transcriptKey
+	transcriptSeq     int
+	captured          map[string]string
+	capturing         bool
 
 	dialog     *dialog
 	showHelp   bool
@@ -127,6 +132,7 @@ func New(o Options) *Model {
 	m := &Model{
 		mgr:          o.Manager,
 		openCodeScan: o.ScanOpenCode,
+		openCodeLoad: o.LoadOpenCode,
 		cfg:          o.Config,
 		changes:      o.Changes,
 		afterScan:    o.AfterScan,
@@ -145,7 +151,6 @@ func New(o Options) *Model {
 		tmuxPrefix:   "C-b",
 		vp:           viewport.New(),
 		transcripts:  map[transcriptKey]string{},
-		loading:      map[transcriptKey]bool{},
 		captured:     map[string]string{},
 	}
 	m.applyTheme(true)
@@ -174,9 +179,10 @@ type (
 	changesMsg    struct{}
 	previewDueMsg struct{ seq int }
 	transcriptMsg struct {
-		providerSeq int
-		key         transcriptKey
-		content     string
+		seq     int
+		key     transcriptKey
+		content string
+		err     error
 	}
 	captureTickMsg struct{}
 	captureMsg     struct {
@@ -270,22 +276,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.syncPreview(true)
 
 	case transcriptMsg:
-		if msg.providerSeq != m.providerSeq {
+		if m.transcriptCancel == nil || msg.seq != m.transcriptSeq {
 			return m, nil
 		}
-		delete(m.loading, msg.key)
+		m.transcriptCancel = nil
+		if it := m.selected(); it == nil || msg.key != m.transcriptKey(*it) {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.vp.SetContent(m.st.errText.Render("Cannot read transcript: " + msg.err.Error()))
+			m.vp.GotoBottom()
+			return m, nil
+		}
 		if len(m.transcripts) > 64 {
 			clear(m.transcripts)
 		}
 		m.transcripts[msg.key] = msg.content
-		if msg.key.id == m.previewID {
-			return m, m.syncPreview(false)
-		}
-		return m, nil
+		return m, m.syncPreview(false)
 
 	case captureTickMsg:
 		var cmd tea.Cmd
-		if it := m.selected(); m.live && m.previewVisible() && it != nil && it.Tmux != nil {
+		if it := m.selected(); m.livePreview() && m.previewVisible() && it != nil && it.Tmux != nil {
 			cmd = m.capture(*it)
 		}
 		return m, tea.Batch(captureTick(), cmd)
@@ -300,7 +311,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text = m.st.errText.Render("capture failed: " + msg.err.Error())
 		}
 		m.captured[msg.id] = text
-		if m.live && msg.id == m.previewID {
+		if m.livePreview() && msg.id == m.previewID {
 			return m, m.syncPreview(false)
 		}
 		return m, nil
@@ -740,10 +751,11 @@ func (m *Model) rename(it manager.Item, name string) tea.Cmd {
 	}
 	m.applyNames()
 	m.rebuild()
+	text := "Renamed " + shortID(s.ID)
 	if name == "" {
-		return m.setStatus("Removed the name of "+shortID(s.ID), levelInfo)
+		text = "Removed the name of " + shortID(s.ID)
 	}
-	return m.setStatus("Renamed "+shortID(s.ID), levelInfo)
+	return tea.Batch(m.setStatus(text, levelInfo), m.syncPreview(true))
 }
 
 func (m *Model) selected() *manager.Item {
@@ -828,6 +840,7 @@ func (m *Model) layout() {
 }
 
 func (m *Model) previewVisible() bool { return m.previewOn && m.width >= 100 }
+func (m *Model) livePreview() bool    { return m.provider == claudeView && m.live }
 func (m *Model) filterVisible() bool  { return m.filtering || m.query.raw != "" }
 
 func (m *Model) setQuery(v string) {
@@ -841,10 +854,12 @@ func (m *Model) setQuery(v string) {
 // loading content that is not cached; otherwise it only uses the cache.
 func (m *Model) syncPreview(load bool) tea.Cmd {
 	if !m.previewVisible() {
+		m.cancelTranscript()
 		return nil
 	}
 	it := m.selected()
 	if it == nil {
+		m.cancelTranscript()
 		m.previewID = ""
 		m.vp.SetContent("")
 		return nil
@@ -868,10 +883,8 @@ func (m *Model) syncPreview(load bool) tea.Cmd {
 }
 
 func (m *Model) previewContent(it manager.Item, load bool) (string, bool, tea.Cmd) {
-	if m.provider == openCodeView {
-		return m.st.dim.Render("Transcript and live previews are unavailable for OpenCode."), true, nil
-	}
-	if m.live {
+	if m.livePreview() {
+		m.cancelTranscript()
 		if it.Tmux == nil {
 			return m.st.dim.Render("No tmux session for this conversation.\nPress enter to resume it in tmux, or tab for the transcript."), true, nil
 		}
@@ -881,31 +894,51 @@ func (m *Model) previewContent(it manager.Item, load bool) (string, bool, tea.Cm
 		}
 		return c, ok, nil
 	}
-	if it.Session.Path == "" {
+	if m.provider == claudeView && it.Session.Path == "" {
+		m.cancelTranscript()
 		return m.st.dim.Render("No transcript yet."), true, nil
 	}
+	if m.provider == openCodeView && m.openCodeLoad == nil {
+		return m.st.dim.Render("Transcript preview is unavailable."), true, nil
+	}
 	key := m.transcriptKey(it)
+	if m.transcriptCancel != nil && key != m.transcriptPending {
+		m.cancelTranscript()
+	}
 	if c, ok := m.transcripts[key]; ok {
 		return c, true, nil
 	}
-	if !load || m.loading[key] {
+	if !load || m.transcriptCancel != nil {
 		return "", false, nil
 	}
-	m.loading[key] = true
 	return "", false, m.loadTranscript(it.Session, key)
 }
 
+func (m *Model) cancelTranscript() {
+	if m.transcriptCancel != nil {
+		m.transcriptCancel()
+		m.transcriptCancel = nil
+	}
+}
+
 func (m *Model) loadTranscript(s provider.Session, key transcriptKey) tea.Cmd {
-	mgr, n, st, md := m.mgr, m.cfg.PreviewMessages, m.st, m.md
-	seq := m.providerSeq
+	load, n, st, md := m.mgr.Load, m.cfg.PreviewMessages, m.st, m.md
+	if m.provider == openCodeView {
+		load = m.openCodeLoad
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.transcriptCancel, m.transcriptPending = cancel, key
+	m.transcriptSeq++
+	seq := m.transcriptSeq
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		t, err := mgr.Load(ctx, s, n)
+		ctx, timeout := context.WithTimeout(ctx, 15*time.Second)
+		defer timeout()
+		t, err := load(ctx, s, n)
 		if err != nil {
-			return transcriptMsg{seq, key, st.errText.Render("Cannot read transcript: " + err.Error())}
+			return transcriptMsg{seq: seq, key: key, err: err}
 		}
-		return transcriptMsg{seq, key, renderTranscript(t, key.width, key.dark, st, md)}
+		return transcriptMsg{seq: seq, key: key, content: renderTranscript(t, key.width, key.dark, st, md)}
 	}
 }
 

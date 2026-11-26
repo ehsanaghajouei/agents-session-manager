@@ -56,10 +56,10 @@ func (m *Model) switchProvider() tea.Cmd {
 	m.statusSeq++
 	m.previewID = ""
 	m.previewSeq++
+	m.cancelTranscript()
 	m.vp.SetContent("")
 	m.capturing = false
 	clear(m.transcripts)
-	clear(m.loading)
 	clear(m.captured)
 	return m.startView()
 }

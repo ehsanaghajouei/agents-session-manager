@@ -10,13 +10,6 @@ import (
 	"github.com/ehsanaghajouei/agents-session-manager/internal/provider"
 )
 
-type sessionPage struct {
-	Data   []sessionInfo `json:"data"`
-	Cursor *struct {
-		Next string `json:"next"`
-	} `json:"cursor"`
-}
-
 type sessionInfo struct {
 	ID       string   `json:"id"`
 	Title    string   `json:"title"`
@@ -55,7 +48,7 @@ func (c *Client) Discover(ctx context.Context, ex host.Executor) ([]provider.Ses
 	seenCursors := make(map[string]bool)
 	query := url.Values{"order": {"desc"}}
 	for {
-		var page sessionPage
+		var page apiPage[sessionInfo]
 		if err := c.get(ctx, ex, path+"?"+query.Encode(), &page); err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
