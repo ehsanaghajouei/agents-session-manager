@@ -40,6 +40,8 @@ type Options struct {
 	ResumeOpenCode func(context.Context, provider.Session) (*exec.Cmd, error)
 	// NewOpenCode creates a session and returns its ID and attach command.
 	NewOpenCode func(context.Context, string) (string, *exec.Cmd, error)
+	// DeleteOpenCode permanently deletes a session after confirmation.
+	DeleteOpenCode func(context.Context, string) error
 	// Changes signals that Claude's files changed. Nil disables watching.
 	Changes <-chan struct{}
 	// AfterScan runs in the scan goroutine, e.g. to persist the cache.
@@ -60,10 +62,11 @@ const (
 
 // dialog is a modal: a yes/no confirmation, or a one-line input.
 type dialog struct {
-	title string
-	body  string
-	input *textinput.Model // nil for a confirmation
-	onYes func(m *Model, value string) tea.Cmd
+	title  string
+	body   string
+	input  *textinput.Model // nil for a confirmation
+	onYes  func(m *Model, value string) tea.Cmd
+	review *deleteReview
 }
 
 type Model struct {
@@ -80,6 +83,8 @@ type Model struct {
 	openCodeLoad      func(context.Context, provider.Session, int) (provider.Transcript, error)
 	openCodeResume    func(context.Context, provider.Session) (*exec.Cmd, error)
 	openCodeNew       func(context.Context, string) (string, *exec.Cmd, error)
+	openCodeDelete    func(context.Context, string) error
+	openCodeMarks     map[string]bool
 	provider          providerView
 	providerSeq       int
 	providerSelection [numProviderViews]string
@@ -141,6 +146,8 @@ func New(o Options) *Model {
 		openCodeLoad:   o.LoadOpenCode,
 		openCodeResume: o.ResumeOpenCode,
 		openCodeNew:    o.NewOpenCode,
+		openCodeDelete: o.DeleteOpenCode,
+		openCodeMarks:  make(map[string]bool),
 		cfg:            o.Config,
 		changes:        o.Changes,
 		afterScan:      o.AfterScan,
@@ -344,6 +351,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setStatus(msg.err.Error(), levelError)
 		}
 		return m, tea.Batch(m.setStatus(msg.text, levelInfo), m.scan())
+
+	case bulkDeleteMsg:
+		return m, m.onBulkDelete(msg)
 
 	case hideMsg:
 		return m, m.onHide(msg)
@@ -1174,6 +1184,19 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if it != nil {
 			return m.confirmKill(*it)
 		}
+	case key.Matches(msg, k.Delete):
+		if m.provider == openCodeView {
+			return m.openCodeDeleteSelection(it)
+		}
+	case key.Matches(msg, k.Mark):
+		if m.provider == openCodeView && m.openCodeDelete != nil && it != nil && m.pendingActions == 0 {
+			id := it.Session.ID
+			if m.openCodeMarks[id] {
+				delete(m.openCodeMarks, id)
+			} else {
+				m.openCodeMarks[id] = true
+			}
+		}
 	case key.Matches(msg, k.Pin):
 		if it != nil {
 			return m.togglePin(*it)
@@ -1266,6 +1289,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 func (m *Model) handleDialogKey(msg tea.KeyPressMsg) tea.Cmd {
 	d := m.dialog
+	if d.review != nil && m.moveDeleteReview(msg, d.review) {
+		return nil
+	}
 	if d.input == nil {
 		switch msg.String() {
 		case "y", "Y":
@@ -1415,7 +1441,7 @@ func (m *Model) viewFooter() string {
 	// Drop the least important hints until the line fits.
 	k := m.helpKeys()
 	bindings := k.ShortHelp()
-	for _, drop := range []key.Binding{k.PreviewMode, k.Group, k.Sort, k.New, k.Filter, k.Resume, k.SwitchProvider} {
+	for _, drop := range []key.Binding{k.PreviewMode, k.Group, k.Sort, k.New, k.Mark, k.Delete, k.Filter, k.Resume, k.SwitchProvider} {
 		if line := " " + m.help.ShortHelpView(bindings); lipgloss.Width(line) <= m.width {
 			return line
 		}
@@ -1481,11 +1507,20 @@ func (m *Model) viewHelp(height int) string {
 
 func (m *Model) viewDialog() string {
 	d := m.dialog
+	if d.review != nil {
+		return m.viewDeleteReview(d)
+	}
 	parts := []string{m.st.title.Render(d.title), "", d.body}
 	if d.input != nil {
 		parts = append(parts, d.input.View(), "", m.st.dim.Render("enter confirm · esc cancel"))
 	} else {
 		parts = append(parts, "", m.st.dim.Render("y yes · n no"))
 	}
-	return m.st.dialog.Render(strings.Join(parts, "\n"))
+	text := strings.Join(parts, "\n")
+	box := m.st.dialog.Render(text)
+	if lipgloss.Height(box) > m.listH {
+		parts = slices.DeleteFunc(parts, func(part string) bool { return part == "" })
+		return m.st.dialog.PaddingTop(0).PaddingBottom(0).Render(strings.Join(parts, "\n"))
+	}
+	return box
 }

@@ -5,6 +5,7 @@ import "charm.land/bubbles/v2/key"
 type keyMap struct {
 	Up, Down, PageUp, PageDown, Top, Bottom key.Binding
 	Resume, New, Kill, Pin, Rename, Hide    key.Binding
+	Delete, Mark                            key.Binding
 	CopyID, CopyCmd, Export, Import         key.Binding
 	Filter, ClearFilter, Sort, Group        key.Binding
 	ShowHidden                              key.Binding
@@ -27,6 +28,8 @@ func defaultKeys() keyMap {
 		Resume:         b([]string{"enter"}, "enter", "resume/attach"),
 		New:            b([]string{"n"}, "n", "new session"),
 		Kill:           b([]string{"x"}, "x", "kill tmux session"),
+		Delete:         b([]string{"D"}, "D", "delete session"),
+		Mark:           b([]string{"space"}, "space", "toggle selection"),
 		Pin:            b([]string{"P"}, "P", "pin/unpin"),
 		Rename:         b([]string{"R"}, "R", "rename"),
 		Hide:           b([]string{"H"}, "H", "hide/unhide"),
@@ -53,13 +56,13 @@ func defaultKeys() keyMap {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.SwitchProvider, k.Resume, k.New, k.Filter, k.Sort, k.Group, k.PreviewMode, k.Help, k.Quit}
+	return []key.Binding{k.SwitchProvider, k.Resume, k.New, k.Mark, k.Delete, k.Filter, k.Sort, k.Group, k.PreviewMode, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
-		{k.Resume, k.New, k.Kill, k.Pin, k.Rename, k.Hide, k.Export, k.Import, k.CopyID, k.CopyCmd, k.Refresh},
+		{k.Resume, k.New, k.Kill, k.Mark, k.Delete, k.Pin, k.Rename, k.Hide, k.Export, k.Import, k.CopyID, k.CopyCmd, k.Refresh},
 		{k.Filter, k.ClearFilter, k.Sort, k.Group, k.ShowHidden},
 		{k.PreviewMode, k.TogglePreview, k.ScrollDown, k.ScrollUp, k.HalfDown, k.HalfUp},
 		{k.SwitchProvider, k.Help, k.Quit},

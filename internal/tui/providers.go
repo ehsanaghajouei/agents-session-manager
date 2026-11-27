@@ -46,6 +46,7 @@ func (m *Model) switchProvider() tea.Cmd {
 		cancel()
 	}
 	m.providerSelection[m.provider] = m.selID
+	clear(m.openCodeMarks)
 	m.provider = (m.provider + 1) % numProviderViews
 	m.providerSeq++
 	m.selID = m.providerSelection[m.provider]
@@ -76,6 +77,8 @@ func (m *Model) startView() tea.Cmd {
 func (m *Model) helpKeys() keyMap {
 	k := m.keys
 	k.SwitchProvider.SetEnabled(m.openCodeScan != nil)
+	k.Delete.SetEnabled(m.provider == openCodeView && m.openCodeDelete != nil)
+	k.Mark.SetEnabled(k.Delete.Enabled())
 	if m.provider == openCodeView {
 		k.Resume.SetEnabled(m.openCodeResume != nil)
 		k.New.SetEnabled(m.openCodeNew != nil)

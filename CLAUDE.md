@@ -54,6 +54,12 @@ Adding another agent means a new package under `internal/provider/` that impleme
   - Always compare `procStart` with the live process to guard against pid reuse.
 - Parsers must tolerate unknown fields and record types.
 
+## OpenCode bulk deletion
+
+- `Space` marks or unmarks the highlighted OpenCode session by ID. Marks survive filtering and clear on a provider switch or after a confirmed bulk delete finishes, including partial failures.
+- With marks set, `D` takes its targets from the current filtered list, not the full session inventory. If no marks are visible, report that nothing was deleted; never fall back to deleting the highlighted session. Without marks, use the existing single-session confirmation.
+- Confirm the exact set of targets once, then delete through the OpenCode V2 session API. OpenCode can cascade a parent deletion to its children, even if those children are filtered out; the bulk dialog does not add a cascade warning. Refresh the list and report failures after the operation. Test with fake scan and delete callbacks, never against real sessions.
+
 ## Rules
 
 - **Read-only access to Claude Code's files.** Never write, move or delete anything under `claude_dir`. The one exception is importing a backup (`provider/claude/backup.go`), which runs only after the user confirms:

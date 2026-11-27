@@ -72,6 +72,12 @@ func (c *Client) request(ctx context.Context, ex host.Executor, path string, dst
 		}
 		return fmt.Errorf("opencode API %s: %w", path, err)
 	}
+	if dst == nil {
+		if strings.TrimSpace(string(out)) != "" {
+			return fmt.Errorf("opencode API %s: expected an empty response", path)
+		}
+		return nil
+	}
 	if err := json.Unmarshal(out, dst); err != nil {
 		return fmt.Errorf("opencode API %s: decode response: %w", path, err)
 	}

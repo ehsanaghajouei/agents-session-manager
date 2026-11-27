@@ -97,6 +97,10 @@ Press `enter` to resume an OpenCode session in tmux or reattach to its existing 
 
 OpenCode shows `idle` when there is a matching `oc-<session-id>` tmux session and the shared local service reports no active work. It shows `external` when the service reports active work and there is no matching tmux session, and `unknown` when activity or tmux status cannot be checked. Idle external clients and private servers are not detected. Hiding an OpenCode session does not stop it.
 
+Press `D` to permanently delete the selected OpenCode session, its transcript, and any child sessions. ASM asks for confirmation first. This can interrupt active work and cannot be undone.
+
+Press `Space` to mark or unmark OpenCode sessions for bulk deletion. With marks set, `D` asks once to delete only the marked sessions shown by the current list filter. If none of the marks are visible, nothing is deleted. Marks clear when you switch providers or after a confirmed bulk delete finishes.
+
 ### Keys
 
 | Key | Action |
@@ -108,6 +112,8 @@ OpenCode shows `idle` when there is a matching `oc-<session-id>` tmux session an
 | `enter` | Resume or attach |
 | `n` | New session (asks for a directory) |
 | `x` | Kill the session's tmux session |
+| `Space` | Toggle the highlighted session's bulk selection (OpenCode only) |
+| `D` | Permanently delete visible marked sessions, or the highlighted session if no marks are set (OpenCode only; asks first) |
 | `P` | Pin / unpin |
 | `R` | Rename (an empty name restores the original title) |
 | `H` | Hide / unhide (asks first; a running Claude Code session is stopped before it is hidden) |

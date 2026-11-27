@@ -104,6 +104,9 @@ func run() error {
 		NewOpenCode: func(ctx context.Context, dir string) (string, *exec.Cmd, error) {
 			return manager.NewService(ctx, ex, openCode, tm, openCodeTmuxPrefix, dir)
 		},
+		DeleteOpenCode: func(ctx context.Context, id string) error {
+			return openCode.Delete(ctx, ex, id)
+		},
 		Config:              cfg,
 		Changes:             changes,
 		AfterScan:           cache.Save,

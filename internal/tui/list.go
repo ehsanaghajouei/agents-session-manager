@@ -283,16 +283,20 @@ func (m *Model) viewList(width, height int) string {
 			continue
 		}
 		it := m.items[r.item]
+		prefix := " "
+		if m.provider == openCodeView && m.openCodeMarks[it.Session.ID] {
+			prefix = "*"
+		}
 		cells := make([]string, len(cols))
 		for j, c := range cols {
 			cells[j] = c.render(it, now)
 		}
 		if i == m.cursor {
-			lines = append(lines, m.st.selected.Render(fit(" "+strings.Join(cells, " "), width, false)))
+			lines = append(lines, m.st.selected.Render(fit(prefix+strings.Join(cells, " "), width, false)))
 			continue
 		}
 		if m.isHidden(it) {
-			lines = append(lines, m.st.hiddenRow.Render(" "+strings.Join(cells, " ")))
+			lines = append(lines, m.st.hiddenRow.Render(prefix+strings.Join(cells, " ")))
 			continue
 		}
 		for j, c := range cols {
@@ -303,7 +307,7 @@ func (m *Model) viewList(width, height int) string {
 				cells[j] = m.st.dim.Render(cells[j])
 			}
 		}
-		lines = append(lines, " "+strings.Join(cells, " "))
+		lines = append(lines, prefix+strings.Join(cells, " "))
 	}
 	for len(lines) < height {
 		lines = append(lines, "")

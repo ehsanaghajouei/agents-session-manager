@@ -190,7 +190,7 @@ func TestSwitchProvider(t *testing.T) {
 			t.Errorf("OpenCode view contains %q", text)
 		}
 	}
-	for _, k := range []string{"enter", "n", "x", "Y", "E", "I"} {
+	for _, k := range []string{"enter", "n", "D", "x", "Y", "E", "I"} {
 		press(m, k)
 		if m.dialog != nil || m.pendingActions != 0 || !strings.Contains(m.status, "unavailable for OpenCode") {
 			t.Fatalf("%s was not blocked in OpenCode: status=%q", k, m.status)
@@ -343,6 +343,87 @@ func TestOpenCodeNewSavedSessionOnLaunchFailure(t *testing.T) {
 	_, refresh := m.Update(create())
 	if refresh == nil || m.selID != "ses_new" || m.pendingActions != 0 || !strings.Contains(m.status, "was saved but could not open") {
 		t.Fatalf("creation failure: selected=%q, status=%q, pending=%d", m.selID, m.status, m.pendingActions)
+	}
+}
+
+func TestOpenCodeDelete(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		name := "success"
+		if fail {
+			name = "failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			m := newTestModel(t, 60, 12)
+			deleted, calls := false, 0
+			m.openCodeScan = func(context.Context) (manager.Snapshot, error) {
+				if deleted {
+					return manager.Snapshot{}, nil
+				}
+				s := provider.Session{ID: "ses_target", Title: strings.Repeat("long title ", 10)}
+				return manager.Snapshot{Items: []manager.Item{{Session: s}}}, nil
+			}
+			m.openCodeDelete = func(_ context.Context, id string) error {
+				calls++
+				if id != "ses_target" {
+					t.Fatalf("delete was called for %q", id)
+				}
+				if fail {
+					return errors.New("service refused deletion")
+				}
+				deleted = true
+				return nil
+			}
+			press(m, "D")
+			if m.dialog != nil || m.helpKeys().Delete.Enabled() || calls != 0 {
+				t.Fatal("delete is available outside the OpenCode view")
+			}
+			_, scan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+			m.Update(scan())
+			if !m.helpKeys().Delete.Enabled() {
+				t.Fatal("delete is missing from OpenCode help")
+			}
+			press(m, "D")
+			out := m.render()
+			if m.dialog == nil || !strings.Contains(out, "ses_target") || !strings.Contains(out, "child sessions") || !strings.Contains(out, "cannot be undone") {
+				t.Fatalf("delete confirmation missing target or warning:\n%s", out)
+			}
+			if lines := strings.Split(out, "\n"); len(lines) != m.height {
+				t.Fatalf("delete confirmation has %d lines; want %d", len(lines), m.height)
+			} else {
+				for _, line := range lines {
+					if lipgloss.Width(line) > m.width {
+						t.Fatalf("delete confirmation exceeds terminal width: %q", line)
+					}
+				}
+			}
+			_, cancel := m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+			if cancel != nil || m.dialog != nil || m.pendingActions != 0 {
+				t.Fatal("cancel did not close the confirmation without starting deletion")
+			}
+			press(m, "D")
+			_, remove := m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+			press(m, "D", "v")
+			if remove == nil || calls != 0 || m.dialog != nil || m.provider != openCodeView || m.pendingActions != 1 {
+				t.Fatal("delete was duplicated or provider changed while it was pending")
+			}
+			_, result := m.Update(remove())
+			if calls != 1 || m.pendingActions != 0 || result == nil {
+				t.Fatalf("delete did not finish: %d calls, %d actions pending", calls, m.pendingActions)
+			}
+			if fail {
+				if m.statusLevel != levelError || !strings.Contains(m.status, "service refused deletion") || m.selected() == nil {
+					t.Fatalf("delete failure did not preserve the session and show the error: %q", m.status)
+				}
+			} else {
+				if !strings.Contains(m.status, "Deleted OpenCode session") {
+					t.Fatalf("delete success not shown: %q", m.status)
+				}
+				m.Update(result().(tea.BatchMsg)[1]())
+				if m.selected() != nil {
+					t.Fatal("deleted session remained listed after refresh")
+				}
+			}
+		})
 	}
 }
 
