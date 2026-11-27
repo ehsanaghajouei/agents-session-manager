@@ -91,7 +91,8 @@ func run() error {
 	}
 
 	m := tui.New(tui.Options{
-		Manager: mgr,
+		Manager:      mgr,
+		DeleteClaude: mgr.Delete,
 		ScanOpenCode: func(ctx context.Context) (manager.Snapshot, error) {
 			return manager.ScanService(ctx, ex, openCode, tm, openCodeTmuxPrefix)
 		},

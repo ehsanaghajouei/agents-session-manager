@@ -60,6 +60,43 @@ func (*fakeProv) ResumeCmd(s provider.Session) []string {
 }
 func (*fakeProv) NewCmd(id string) []string { return []string{"/usr/bin/claude", "--session-id", id} }
 
+type deleteFixture struct {
+	fakeProv
+	deleted []provider.Session
+}
+
+func (p *deleteFixture) Delete(_ context.Context, _ host.Executor, s provider.Session) error {
+	p.deleted = append(p.deleted, s)
+	return nil
+}
+
+func TestDeleteChecksTmuxAgain(t *testing.T) {
+	ctx := context.Background()
+	session := provider.Session{ID: "target", Path: "/fixture/target.jsonl"}
+	ex := &fakeExec{sessions: "cc-target-other\ncc-target\n"}
+	prov := &deleteFixture{}
+	m := New(ex, prov, tmux.New(ex, ""), "cc-")
+	if err := m.Delete(ctx, session); err == nil || !strings.Contains(err.Error(), "stop") {
+		t.Fatalf("Delete with matching tmux session = %v", err)
+	}
+	failure := &failingTmux{}
+	m = New(failure, prov, tmux.New(failure, ""), "cc-")
+	if err := m.Delete(ctx, session); err == nil || !strings.Contains(err.Error(), "cannot verify tmux status") {
+		t.Fatalf("Delete with unavailable tmux = %v", err)
+	}
+	if len(prov.deleted) != 0 {
+		t.Fatalf("blocked targets reached the provider: %v", prov.deleted)
+	}
+	ex.sessions = "cc-target-other\n"
+	m = New(ex, prov, tmux.New(ex, ""), "cc-")
+	if err := m.Delete(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(prov.deleted, []provider.Session{session}) {
+		t.Fatalf("delete targets = %v", prov.deleted)
+	}
+}
+
 const orphanID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
 func newTest(t *testing.T) (*Manager, *fakeExec) {

@@ -99,7 +99,9 @@ OpenCode shows `idle` when there is a matching `oc-<session-id>` tmux session an
 
 Press `D` to permanently delete the selected OpenCode session, its transcript, and any child sessions. ASM asks for confirmation first. This can interrupt active work and cannot be undone.
 
-Press `Space` to mark or unmark OpenCode sessions for bulk deletion. With marks set, `D` asks once to delete only the marked sessions shown by the current list filter. If none of the marks are visible, nothing is deleted. Marks clear when you switch providers or after a confirmed bulk delete finishes.
+In Claude Code, `D` permanently deletes a saved session’s transcript, its session directory (including subagent transcripts and tool results), and its file-history checkpoints after confirmation. ASM skips sessions with a running Claude process or a matching tmux session, or when it cannot verify activity. To delete a running session, stop it first.
+
+In either view, press `Space` to mark or unmark sessions for bulk deletion. With marks set, `D` asks once to delete only the marked sessions shown by the current list filter. If none of the marks are visible, nothing is deleted. Marks clear when you switch providers or after a confirmed bulk delete finishes. If some targets are blocked or fail, ASM continues with the rest and reports the outcome.
 
 ### Keys
 
@@ -112,8 +114,8 @@ Press `Space` to mark or unmark OpenCode sessions for bulk deletion. With marks 
 | `enter` | Resume or attach |
 | `n` | New session (asks for a directory) |
 | `x` | Kill the session's tmux session |
-| `Space` | Toggle the highlighted session's bulk selection (OpenCode only) |
-| `D` | Permanently delete visible marked sessions, or the highlighted session if no marks are set (OpenCode only; asks first) |
+| `Space` | Toggle the highlighted session's bulk selection |
+| `D` | Permanently delete visible marked sessions, or the highlighted session if no marks are set (asks first) |
 | `P` | Pin / unpin |
 | `R` | Rename (an empty name restores the original title) |
 | `H` | Hide / unhide (asks first; a running Claude Code session is stopped before it is hidden) |

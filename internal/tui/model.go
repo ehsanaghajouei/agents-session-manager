@@ -32,6 +32,8 @@ import (
 type Options struct {
 	Manager *manager.Manager
 	Config  config.Config
+	// DeleteClaude permanently deletes a saved session after confirmation.
+	DeleteClaude func(context.Context, provider.Session) error
 	// ScanOpenCode is called only when the OpenCode view is selected.
 	ScanOpenCode func(context.Context) (manager.Snapshot, error)
 	// LoadOpenCode reads the selected OpenCode session's transcript on demand.
@@ -84,7 +86,9 @@ type Model struct {
 	openCodeResume    func(context.Context, provider.Session) (*exec.Cmd, error)
 	openCodeNew       func(context.Context, string) (string, *exec.Cmd, error)
 	openCodeDelete    func(context.Context, string) error
-	openCodeMarks     map[string]bool
+	claudeDelete      func(context.Context, provider.Session) error
+	deleteMarks       map[string]bool
+	deleting          bool
 	provider          providerView
 	providerSeq       int
 	providerSelection [numProviderViews]string
@@ -147,7 +151,8 @@ func New(o Options) *Model {
 		openCodeResume: o.ResumeOpenCode,
 		openCodeNew:    o.NewOpenCode,
 		openCodeDelete: o.DeleteOpenCode,
-		openCodeMarks:  make(map[string]bool),
+		claudeDelete:   o.DeleteClaude,
+		deleteMarks:    make(map[string]bool),
 		cfg:            o.Config,
 		changes:        o.Changes,
 		afterScan:      o.AfterScan,
@@ -352,8 +357,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(m.setStatus(msg.text, levelInfo), m.scan())
 
-	case bulkDeleteMsg:
-		return m, m.onBulkDelete(msg)
+	case deleteResultMsg:
+		return m, m.onDeleteResult(msg)
 
 	case hideMsg:
 		return m, m.onHide(msg)
@@ -1157,6 +1162,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	it := m.selected()
+	if m.deleting && (key.Matches(msg, k.Resume, k.New, k.Import)) {
+		return m.setStatus("Wait for deletion to finish.", levelInfo)
+	}
 	switch {
 	case key.Matches(msg, k.Quit):
 		return tea.Quit
@@ -1185,16 +1193,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.confirmKill(*it)
 		}
 	case key.Matches(msg, k.Delete):
-		if m.provider == openCodeView {
-			return m.openCodeDeleteSelection(it)
-		}
+		return m.deleteSelection(it)
 	case key.Matches(msg, k.Mark):
-		if m.provider == openCodeView && m.openCodeDelete != nil && it != nil && m.pendingActions == 0 {
+		if m.deleteAction() != nil && it != nil && m.pendingActions == 0 {
 			id := it.Session.ID
-			if m.openCodeMarks[id] {
-				delete(m.openCodeMarks, id)
+			if m.deleteMarks[id] {
+				delete(m.deleteMarks, id)
 			} else {
-				m.openCodeMarks[id] = true
+				m.deleteMarks[id] = true
 			}
 		}
 	case key.Matches(msg, k.Pin):

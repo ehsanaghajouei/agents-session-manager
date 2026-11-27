@@ -243,6 +243,25 @@ func (m *Manager) Kill(ctx context.Context, s provider.Session) error {
 	return m.tmux.KillSession(ctx, m.TmuxName(s.ID))
 }
 
+// Delete checks for a tmux session before handing deletion to the provider.
+// The provider checks its own activity records immediately before removing data.
+func (m *Manager) Delete(ctx context.Context, s provider.Session) error {
+	deleter, ok := m.prov.(interface {
+		Delete(context.Context, host.Executor, provider.Session) error
+	})
+	if !ok {
+		return errors.New("session deletion is unavailable")
+	}
+	sessions, err := m.tmux.SessionNames(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot verify tmux status: %w", err)
+	}
+	if _, ok := sessions[m.TmuxName(s.ID)]; ok {
+		return errors.New("stop the session's tmux session before deleting")
+	}
+	return deleter.Delete(ctx, m.ex, s)
+}
+
 // Terminate stops a Claude process running outside tmux and waits for it
 // to exit.
 func (m *Manager) Terminate(p provider.Process) error {

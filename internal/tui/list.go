@@ -284,7 +284,7 @@ func (m *Model) viewList(width, height int) string {
 		}
 		it := m.items[r.item]
 		prefix := " "
-		if m.provider == openCodeView && m.openCodeMarks[it.Session.ID] {
+		if m.deleteMarks[it.Session.ID] {
 			prefix = "*"
 		}
 		cells := make([]string, len(cols))

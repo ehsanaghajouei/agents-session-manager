@@ -54,17 +54,19 @@ Adding another agent means a new package under `internal/provider/` that impleme
   - Always compare `procStart` with the live process to guard against pid reuse.
 - Parsers must tolerate unknown fields and record types.
 
-## OpenCode bulk deletion
+## Session deletion
 
-- `Space` marks or unmarks the highlighted OpenCode session by ID. Marks survive filtering and clear on a provider switch or after a confirmed bulk delete finishes, including partial failures.
+- `Space` marks or unmarks the highlighted session by ID in either provider. Marks survive filtering and clear on a provider switch or after a confirmed bulk delete finishes, including partial failures.
 - With marks set, `D` takes its targets from the current filtered list, not the full session inventory. If no marks are visible, report that nothing was deleted; never fall back to deleting the highlighted session. Without marks, use the existing single-session confirmation.
-- Confirm the exact set of targets once, then delete through the OpenCode V2 session API. OpenCode can cascade a parent deletion to its children, even if those children are filtered out; the bulk dialog does not add a cascade warning. Refresh the list and report failures after the operation. Test with fake scan and delete callbacks, never against real sessions.
+- Confirm the exact set of targets once. OpenCode deletes through its V2 session API and can cascade a parent deletion to children, even if filtered out; the bulk dialog does not add a cascade warning. Claude Code removes only the three session-owned paths listed below, after rechecking activity and tmux for each target. Continue past failures, refresh the list, and report the outcome. Test with temporary files and fakes, never against real sessions.
 
 ## Rules
 
-- **Read-only access to Claude Code's files.** Never write, move or delete anything under `claude_dir`. The one exception is importing a backup (`provider/claude/backup.go`), which runs only after the user confirms:
+- **Read-only access to Claude Code's files**, except for these two explicitly confirmed actions:
+- **Importing a backup** (`internal/provider/claude/backup.go`):
   - It unpacks into a staging directory inside `claude_dir` and validates every archive entry before moving anything into place.
   - It never leaves two transcripts with the same session ID, because `claude --resume <id>` refuses an ID it finds in two projects.
+- **Deleting a saved session** (`internal/provider/claude/delete.go`): remove only `projects/<project>/<id>.jsonl`, `projects/<project>/<id>/`, and `file-history/<id>/`. Block running sessions, matching tmux sessions, unverifiable activity, and unsafe or ambiguous paths.
 - **No second process on one transcript.**
   - Never start a second Claude process for a session that is already running.
   - `Manager.Resume` re-checks the state at call time and returns `*ExternalError` for a process running outside tmux.

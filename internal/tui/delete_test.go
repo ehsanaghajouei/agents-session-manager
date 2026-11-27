@@ -18,6 +18,56 @@ import (
 
 var spacePress = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 
+func TestClaudeDeleteSelection(t *testing.T) {
+	m := newTestModel(t, 100, 24)
+	var calls []string
+	m.claudeDelete = func(_ context.Context, s provider.Session) error {
+		calls = append(calls, s.ID)
+		if s.ID == "b" {
+			return errors.New("stop the running Claude process")
+		}
+		return nil
+	}
+	if k := m.helpKeys(); !k.Mark.Enabled() || !k.Delete.Enabled() {
+		t.Fatal("deletion bindings are missing from Claude Code help")
+	}
+	press(m, "D")
+	if m.dialog == nil || !strings.Contains(m.dialog.body, "checkpoints") || !strings.Contains(m.dialog.body, "cannot be undone") {
+		t.Fatal("single deletion did not describe its permanent effect")
+	}
+	press(m, "n")
+	if len(calls) != 0 || m.dialog != nil {
+		t.Fatal("cancelling started deletion")
+	}
+	for range 3 {
+		m.Update(spacePress)
+		press(m, "j")
+	}
+	m.setQuery("nonexistent")
+	press(m, "D")
+	if m.dialog != nil || !strings.Contains(m.status, "Nothing deleted") {
+		t.Fatal("all-filtered marks did not block deletion")
+	}
+	m.setQuery("project:web")
+	press(m, "D")
+	if m.dialog == nil || m.dialog.review == nil || len(m.dialog.review.labels) != 2 {
+		t.Fatal("bulk confirmation did not contain exactly the visible marked sessions")
+	}
+	_, run := m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if run == nil || len(calls) != 0 {
+		t.Fatal("confirmation did not queue deletion")
+	}
+	press(m, "enter", "n", "I")
+	if m.dialog != nil || m.pendingActions != 1 {
+		t.Fatal("another session action started during deletion")
+	}
+	_, refresh := m.Update(run())
+	if !slices.Equal(calls, []string{"b", "c"}) || refresh == nil || len(m.deleteMarks) != 0 ||
+		!strings.Contains(m.status, "Deleted 1; 1 blocked or failed") {
+		t.Fatalf("Claude bulk deletion: calls=%v, status=%q, marks=%v", calls, m.status, m.deleteMarks)
+	}
+}
+
 func TestOpenCodeBulkDelete(t *testing.T) {
 	m := newTestModel(t, 100, 24)
 	items := []manager.Item{
@@ -39,8 +89,8 @@ func TestOpenCodeBulkDelete(t *testing.T) {
 		return nil
 	}
 	m.Update(spacePress)
-	if len(m.openCodeMarks) != 0 || m.helpKeys().Mark.Enabled() {
-		t.Fatal("bulk selection is available in Claude Code")
+	if len(m.deleteMarks) != 0 || m.helpKeys().Mark.Enabled() {
+		t.Fatal("bulk selection is available without a deletion callback")
 	}
 	_, scan := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	m.Update(scan())
@@ -49,15 +99,15 @@ func TestOpenCodeBulkDelete(t *testing.T) {
 	}
 	m.Update(spacePress)
 	m.Update(spacePress)
-	if len(m.openCodeMarks) != 0 {
+	if len(m.deleteMarks) != 0 {
 		t.Fatal("pressing Space again did not unmark the session")
 	}
 	for range 3 {
 		m.Update(spacePress)
 		press(m, "j")
 	}
-	if !strings.Contains(ansi.Strip(m.viewList(m.listW, m.listH)), "\n*") || len(m.openCodeMarks) != 3 {
-		t.Fatalf("marked rows not visible or incorrect marks: %v", m.openCodeMarks)
+	if !strings.Contains(ansi.Strip(m.viewList(m.listW, m.listH)), "\n*") || len(m.deleteMarks) != 3 {
+		t.Fatalf("marked rows not visible or incorrect marks: %v", m.deleteMarks)
 	}
 
 	m.setQuery("unmarked")
@@ -87,7 +137,7 @@ func TestOpenCodeBulkDelete(t *testing.T) {
 		}
 	}
 	press(m, "n")
-	if m.dialog != nil || len(m.openCodeMarks) != 3 || len(calls) != 0 {
+	if m.dialog != nil || len(m.deleteMarks) != 3 || len(calls) != 0 {
 		t.Fatal("cancelling did not preserve the marks without deleting")
 	}
 	press(m, "D")
@@ -100,7 +150,7 @@ func TestOpenCodeBulkDelete(t *testing.T) {
 	if !slices.Equal(calls, []string{"ses_a", "ses_b"}) {
 		t.Fatalf("attempted deletes = %v", calls)
 	}
-	if len(m.openCodeMarks) != 0 || m.pendingActions != 0 || m.statusLevel != levelError ||
+	if len(m.deleteMarks) != 0 || m.pendingActions != 0 || m.statusLevel != levelError ||
 		!strings.Contains(m.status, "Deleted 1; 1 unconfirmed") || !strings.Contains(m.status, "service refused") {
 		t.Fatalf("partial failure did not clear marks and report the outcome: %q", m.status)
 	}
@@ -112,7 +162,7 @@ func TestOpenCodeBulkDelete(t *testing.T) {
 	m.Update(spacePress)
 	_, back := m.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
 	m.Update(back())
-	if len(m.openCodeMarks) != 0 || m.provider != claudeView {
+	if len(m.deleteMarks) != 0 || m.provider != claudeView {
 		t.Fatal("switching provider did not clear the marks")
 	}
 }
@@ -125,7 +175,7 @@ func TestOpenCodeBulkDeleteReviewScrolls(t *testing.T) {
 	for i := range 20 {
 		id := fmt.Sprintf("ses_%02d", i)
 		m.items = append(m.items, manager.Item{Session: provider.Session{ID: id, Title: strings.Repeat("long title ", 10)}})
-		m.openCodeMarks[id] = true
+		m.deleteMarks[id] = true
 	}
 	m.rebuild()
 	press(m, "D")
