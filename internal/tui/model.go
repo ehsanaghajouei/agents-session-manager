@@ -1452,6 +1452,7 @@ func (m *Model) viewHelp(height int) string {
 	} else {
 		sections = append(sections, "",
 			m.st.dim.Render("OpenCode activity is reported by the shared local service."),
+			m.st.dim.Render("idle: managed tmux session with no active work."),
 			m.st.dim.Render("external: active with no matching asm tmux session."),
 			m.st.dim.Render("unknown: activity or tmux status could not be checked."),
 			m.st.dim.Render("Idle external clients and private servers are not detected."))

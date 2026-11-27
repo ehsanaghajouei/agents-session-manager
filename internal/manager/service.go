@@ -129,7 +129,7 @@ func ScanService(ctx context.Context, ex host.Executor, p ServiceProvider, tm *t
 		case active[s.ID]:
 			it.State = StateExternal
 		case hasTmux:
-			it.State = StateTmux
+			it.State = StateIdle
 		default:
 			it.State = StateSaved
 		}

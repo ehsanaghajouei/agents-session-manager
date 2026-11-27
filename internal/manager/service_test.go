@@ -202,7 +202,7 @@ func TestScanServiceActivity(t *testing.T) {
 			t.Errorf("unexpected process or tmux assignment: %+v", it)
 		}
 	}
-	if want := []State{StateExternal, StateBusy, StateSaved, StateTmux}; !slices.Equal(states, want) {
+	if want := []State{StateExternal, StateBusy, StateSaved, StateIdle}; !slices.Equal(states, want) {
 		t.Fatalf("states = %v; want %v", states, want)
 	}
 }
